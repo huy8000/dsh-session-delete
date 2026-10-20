@@ -1,0 +1,54 @@
+{
+  "name": "dsh-session-delete",
+  "version": "1.0.0",
+  "description": "Permanently delete a conversation from the DeepSeek Harness sidebar, including its live session and cache.",
+  "license": "MIT",
+  "author": "huy8000",
+  "type": "module",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "session",
+    "delete",
+    "archive"
+  ],
+  "homepage": "https://github.com/huy8000/dsh-session-delete#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/huy8000/dsh-session-delete.git"
+  },
+  "bugs": {
+    "url": "https://github.com/huy8000/dsh-session-delete/issues"
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
+  "scripts": {
+    "check": "node --check index.js && node --check client.js",
+    "pack:check": "npm pack --dry-run"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": ["@deepseek-ai/dsh-client-ui-workspace"]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "title": "删除会话",
+    "description": "在侧栏中永久删除一个对话，包含它的日志与投影缓存。"
+  },
+  "action": {
+    "label": "删除会话",
+    "busy": "正在删除…",
+    "confirmTitle": "删除这个对话？",
+    "confirmBody": "它的日志与缓存会被永久删除，无法恢复。",
+    "failed": "删除失败"
+  }
+}
