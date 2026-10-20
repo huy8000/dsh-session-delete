@@ -1,8 +1,27 @@
 # Changelog
 
-## Unreleased — reliability hardening candidate
+## 1.1.0-rc.1 — unreleased prerelease candidate
 
-Version remains **1.0.0**. Full 1.1.0 release acceptance is blocked by missing
+- Acquire the cold writer lease, Flush and validate paths before archiving,
+  preserving archive/pin state on those failures. Report observed archive
+  state when rc.2 cannot safely perform a conditional rollback.
+- Separate preparation from cleanup attempts. Release only a new unused
+  protection after successful writer/journal cleanup; retain exercised or
+  inherited protection and report it explicitly. Restore recovery protection
+  on startup, including journals for IDs no longer archived.
+- Treat lost/invalid Host responses as unknown outcomes in both languages;
+  distinguish untouched-by-request data, observed archive state and retained
+  protection. Unreadable recovery metadata never claims intact data.
+- Add 22 incremental regression tests, including real SessionStore disposal
+  versus JSONL ownership, concurrent archive/restore, preparation failures,
+  delayed writes, retry and startup recovery. Total: 74 tests on Node 22/24.
+- Recheck live ownership, client reference release and shared-storage limits;
+  document a minimal upstream lifecycle API proposal. Live deletion remains
+  refused. No Tag or Release is created.
+
+## Previous hardening candidate (e4077a3)
+
+That candidate retained **1.0.0**. Full 1.1.0 release acceptance is blocked by missing
 upstream teardown ownership for live Sessions and shared-storage coordination.
 The historical 1.0.0 feature list below describes the original implementation,
 not the safe behavior of this candidate.

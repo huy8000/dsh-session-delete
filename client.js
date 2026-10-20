@@ -24,9 +24,17 @@ window.__ModuleLoader__.load({
       unsupported: '当前 DSH 版本或存储接口未经验证，已拒绝删除。',
       exclusiveStorage: '尚未确认存储目录由单个 Host 独占，已拒绝删除。只有部署确实满足该条件时才能配置 singleHost: true；共享存储不受支持。',
       hostFailed: 'Host 未能完成删除。请排除存储或 Workspace 错误后重试。',
-      partial: '删除已部分执行，不能撤销。清理尚未全部完成，请排除错误后重试。',
+      partial: '清理已开始或上次操作尚未完成，数据可能已部分删除。请排除错误后重试。',
       syncFailed: 'Host 已确认删除，但客户端同步失败。请重试刷新或重新加载页面。',
       retrySync: '重试刷新',
+      unknown: 'Host 结果未知：连接中断或响应无效，删除可能已经完成。请刷新核对，必要时重试同一会话。',
+      preserved: '本次请求未开始删除会话日志。',
+      dataUnknown: '无法确认会话数据完整性，请检查 Host 日志和存储，勿假定数据仍完整。',
+      archived: '会话当前已归档；可重试删除，或在 DSH 中手动恢复。',
+      restored: '会话当前未归档。',
+      archiveUnknown: '当前归档状态无法确认，请刷新检查。',
+      noRollback: '为保留其他客户端的操作，插件未自动恢复归档。',
+      protected: 'Host 仍保留清理保护，请排除错误后重试。若要继续使用会话，请先重启 Host 并确认数据完整。',
     }
 
     const en = {
@@ -45,9 +53,17 @@ window.__ModuleLoader__.load({
       unsupported: 'This DSH version or storage interface is unverified. Deletion was refused.',
       exclusiveStorage: 'Exclusive single-Host storage has not been declared. Deletion was refused. Configure singleHost: true only when this deployment meets that condition; shared storage is unsupported.',
       hostFailed: 'The Host could not complete deletion. Resolve storage or Workspace errors, then retry.',
-      partial: 'Deletion partially completed and cannot be undone. Cleanup is incomplete; resolve the error and retry.',
+      partial: 'Cleanup started or an earlier attempt is unfinished; data may be incomplete. Resolve the error and retry.',
       syncFailed: 'The Host confirmed deletion, but client synchronization failed. Retry refresh or reload the page.',
       retrySync: 'Retry refresh',
+      unknown: 'The Host outcome is unknown: connection lost or invalid response. Deletion may have completed. Refresh to check; retry the same session if needed.',
+      preserved: 'This request has not deleted session logs.',
+      dataUnknown: 'Data integrity is unknown. Check the Host log and storage; do not assume the data is intact.',
+      archived: 'The session is currently archived. Retry deletion or restore it manually in DSH.',
+      restored: 'The session is currently unarchived.',
+      archiveUnknown: 'The archive state is unknown. Refresh to check.',
+      noRollback: 'Archive was not automatically restored, to preserve other clients\' actions.',
+      protected: 'The Host retains cleanup protection. Resolve the error and retry; to use the session again, restart the Host and verify data integrity first.',
     }
 
     /** Resolved through the host locale service once the plugin applies. */
@@ -209,15 +225,25 @@ window.__ModuleLoader__.load({
           }
           return { ok: true }
         }
+        if (body?.ok !== false || body.sessionId !== sessionId || !['rejected', 'partial'].includes(body.state)) {
+          return { ok: false, message: t('unknown') }
+        }
         const key = body?.error === 'session-active' ? 'active'
           : body?.error === 'session-owned' ? 'owned'
           : body?.error === 'live-unload-unsupported' ? 'liveUnsupported'
-          : ['unsafe-path', 'ambiguous-session', 'storage-unknown', 'identity-changed'].includes(body?.error) ? 'unsafePath'
-          : body?.error === 'unsupported-runtime' ? 'unsupported'
+          : ['unsafe-path', 'ambiguous-session', 'storage-unknown', 'identity-changed', 'storage-changed'].includes(body?.error) ? 'unsafePath'
+          : ['unsupported-runtime', 'unsupported-format'].includes(body?.error) ? 'unsupported'
           : body?.error === 'exclusive-storage-unverified' ? 'exclusiveStorage' : 'hostFailed'
         message = `${body?.state === 'partial' ? t('partial') + ' ' : ''}${t(key)}`
-      } catch (error) {
-        message = `${t('failed')}：${error instanceof Error ? error.message : String(error)}`
+        if (body.dataState === 'preserved') message += ` ${t('preserved')}`
+        if (body.dataState === 'uncertain' && body.state !== 'partial') message += ` ${t('dataUnknown')}`
+        if (body.archive) {
+          message += ` ${t(body.archive.after === true ? 'archived' : body.archive.after === false ? 'restored' : 'archiveUnknown')}`
+          if (body.archive.restoration === 'unsupported') message += ` ${t('noRollback')}`
+        }
+        if (body.protection === 'retained') message += ` ${t('protected')}`
+      } catch {
+        message = t('unknown')
       }
       return { ok: false, message }
     }

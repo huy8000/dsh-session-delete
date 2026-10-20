@@ -116,13 +116,13 @@ test('confirmed Host success removes locally before refresh and closes the dialo
 
 test('Host rejection and partial failure leave the row and show localized readable errors', async t => {
   for (const state of ['rejected', 'partial']) {
-    const c = await client(t, { language: 'zh', response: () => Response.json({ ok: false, state, error: 'session-active' }, { status: 409 }) })
+    const c = await client(t, { language: 'zh', response: () => Response.json({ ok: false, sessionId: 'session-1', state, error: 'session-active' }, { status: 409 }) })
     await c.open()
     await act(async () => c.confirm().props.onClick())
     assert.deepEqual(c.calls, [])
     assert.ok(c.dialog())
     assert.match(c.alert(), /进行中的工作/)
-    if (state === 'partial') assert.match(c.alert(), /部分执行/)
+    if (state === 'partial') assert.match(c.alert(), /部分删除/)
   }
 })
 
@@ -185,10 +185,52 @@ test('client synchronization failure offers refresh retry without resubmitting d
 
 test('unsupported live deletion reports the actionable message in both languages', async t => {
   for (const language of ['en', 'zh']) {
-    const c = await client(t, { language, response: () => Response.json({ ok: false, state: 'rejected', error: 'live-unload-unsupported' }, { status: 409 }) })
+    const c = await client(t, { language, response: () => Response.json({ ok: false, sessionId: 'session-1', state: 'rejected', error: 'live-unload-unsupported' }, { status: 409 }) })
     await c.open()
     await act(async () => c.confirm().props.onClick())
     assert.match(c.alert(), language === 'en' ? /Restart the Host/ : /重启 Host/)
+    assert.deepEqual(c.calls, [])
+  }
+})
+
+test('lost or invalid response means Host outcome unknown, never confirmed preservation', async t => {
+  for (const language of ['en', 'zh']) {
+    for (const response of [() => { throw new Error('offline') }, () => new Response('invalid json')]) {
+      const c = await client(t, { language, response })
+      await c.open()
+      await act(async () => c.confirm().props.onClick())
+      assert.match(c.alert(), language === 'en' ? /outcome is unknown/ : /结果未知/)
+      assert.deepEqual(c.calls, [])
+      assert.ok(c.dialog())
+    }
+  }
+})
+
+test('pre-destructive refusal explains preserved data, archive and retained protection', async t => {
+  for (const language of ['en', 'zh']) {
+    const c = await client(t, { language, response: () => Response.json({
+      ok: false, sessionId: 'session-1', state: 'rejected', error: 'journal-failed',
+      dataState: 'preserved', archive: { before: false, after: true, restoration: 'unsupported' }, protection: 'retained',
+    }, { status: 500 }) })
+    await c.open()
+    await act(async () => c.confirm().props.onClick())
+    assert.match(c.alert(), language === 'en' ? /request has not deleted session logs/ : /本次请求未开始删除会话日志/)
+    assert.match(c.alert(), language === 'en' ? /currently archived/ : /当前已归档/)
+    assert.match(c.alert(), language === 'en' ? /restart the Host/ : /重启 Host/)
+    assert.deepEqual(c.calls, [])
+  }
+})
+
+test('unknown data integrity after a Host rejection does not promise intact logs', async t => {
+  for (const language of ['en', 'zh']) {
+    const c = await client(t, { language, response: () => Response.json({
+      ok: false, sessionId: 'session-1', state: 'rejected', error: 'preflight-failed',
+      dataState: 'uncertain', protection: 'retained',
+    }, { status: 500 }) })
+    await c.open()
+    await act(async () => c.confirm().props.onClick())
+    assert.match(c.alert(), language === 'en' ? /Data integrity is unknown/ : /无法确认会话数据完整性/)
+    assert.doesNotMatch(c.alert(), language === 'en' ? /request has not deleted/ : /本次请求未开始删除/)
     assert.deepEqual(c.calls, [])
   }
 })

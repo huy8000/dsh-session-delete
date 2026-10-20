@@ -48,10 +48,14 @@ function cacheAdapter(cache) {
   }
   let fence = fences.get(table)
   if (fence === undefined) {
-    const blocked = new Set()
+    const blocked = new Map()
     const put = table.put
     const guardedPut = function (id, record) {
-      if (blocked.has(id)) return Promise.reject(new Refusal('session-deleted', 'Session deletion blocks cache writes.'))
+      const protection = blocked.get(id)
+      if (protection !== undefined) {
+        protection.intercepted = true
+        return Promise.reject(new Refusal('session-deleted', 'Session deletion blocks cache writes.'))
+      }
       return put.call(this, id, record)
     }
     table.put = guardedPut
@@ -71,7 +75,14 @@ function fenceWorkspace(registry, blocked) {
   let fence = workspaceFences.get(host)
   if (fence === undefined) {
     const original = host.candidateMatches
-    const candidateMatches = (id, path) => !blocked.has(id) && original(id, path)
+    const candidateMatches = (id, path) => {
+      const protection = blocked.get(id)
+      if (protection !== undefined) {
+        protection.intercepted = true
+        return false
+      }
+      return original(id, path)
+    }
     host.candidateMatches = candidateMatches
     fence = { blocked, candidateMatches }
     workspaceFences.set(host, fence)
@@ -196,18 +207,22 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
       refuse('unsafe-path', 'Session metadata and its storage location disagree.')
     }
     const path = matches[0] ?? expected
-    const files = []
-    if (path !== undefined) {
-      for (const entry of await entries(path)) {
-        if (!entry.isFile() || (!LOG.test(entry.name) && entry.name !== 'session.lock')) {
-          refuse('unsafe-path', 'Unexpected files or links in the session directory.')
-        }
-        await checkPath(join(path, entry.name), 'file')
-        if (entry.name !== 'session.lock') files.push(entry.name)
-      }
-    }
+    const files = await logFiles(path)
     if (header === undefined && files.length > 0) refuse('storage-unknown', 'Unrecognized session data must be inspected before deletion.')
-    return { path, files: files.sort() }
+    return { path, files }
+  }
+
+  async function logFiles(path) {
+    if (path === undefined) return []
+    const files = []
+    for (const entry of await entries(path)) {
+      if (!entry.isFile() || (!LOG.test(entry.name) && entry.name !== 'session.lock')) {
+        refuse('unsafe-path', 'Unexpected files or links in the session directory.')
+      }
+      await checkPath(join(path, entry.name), 'file')
+      if (entry.name !== 'session.lock') files.push(entry.name)
+    }
+    return files.sort()
   }
 
   async function cachePath(rt, id) {
@@ -220,14 +235,23 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
     const folder = join(rt.root, '.dsh-session-delete')
     const path = join(folder, `${id}.json`)
     if (await checkPath(path, 'file') === undefined) return { folder, path }
-    const record = JSON.parse(await fs.readFile(path, 'utf8'))
-    if (record.version !== 1) refuse('journal-invalid', 'Deletion recovery metadata is unsupported.')
-    headerValid(record.header, id)
-    return { folder, path, record }
+    try {
+      const record = JSON.parse(await fs.readFile(path, 'utf8'))
+      if (record.version !== 1) refuse('journal-invalid', 'Deletion recovery metadata is unsupported.')
+      headerValid(record.header, id)
+      return { folder, path, record }
+    } catch (error) {
+      // An existing but unreadable record cannot prove how far an earlier
+      // attempt got. Preserve evidence and fail closed instead of allowing
+      // cache/Workspace writes or claiming the data is still complete.
+      rt.blocked.set(id, rt.blocked.get(id) ?? { intercepted: false })
+      throw error
+    }
   }
 
-  async function unlinkFile(path) {
+  async function unlinkFile(path, beforeUnlink = () => {}) {
     if (await checkPath(path, 'file') === undefined) return
+    beforeUnlink()
     await fs.unlink(path)
   }
 
@@ -238,15 +262,32 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
   async function perform(id) {
     let phase = 'preflight'
     let destructive = false
+    let recovering = false
     let writer
+    let rt
+    let saved
+    let journalCreated = false
+    let protection
+    let newProtection = false
+    let releaseFailed = false
+    let archiveBefore
+    let archiveAttempted = false
     try {
       if (!singleHost) {
         refuse('exclusive-storage-unverified', 'Deletion requires singleHost: true and an exclusively owned storage directory. Shared-storage access cannot be verified by DSH.', 503)
       }
-      const rt = adapter()
+      rt = adapter()
+      archiveBefore = ctx.workspaceRegistry.archivedSessionIds.includes(id)
+      saved = await journal(rt, id)
+      recovering = saved.record !== undefined
+      if (recovering) {
+        // A v1 record may precede a crash at any cleanup boundary. Never infer
+        // intact data or release an older lifecycle's protection on retry.
+        protection = rt.blocked.get(id) ?? { intercepted: false }
+        rt.blocked.set(id, protection)
+      }
       await inactive(id)
       cold(id)
-      const saved = await journal(rt, id)
       const snapshot = await rt.persistence.stat(id)
       if (snapshot?.formatStatus === 'migration-required') refuse('unsupported-format', 'Open/migrate this session with DSH before deleting it.')
       const header = snapshot === undefined ? saved.record?.header : headerValid(snapshot.header, id)
@@ -257,10 +298,6 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
       const target = await locate(rt, id, header)
       await cachePath(rt, id)
       if (snapshot !== undefined) {
-        phase = 'archive'
-        await ctx.workspaceRegistry.archiveSession(id, {})
-        await inactive(id) // archive skips checking already-archived IDs
-        cold(id)
         phase = 'ownership'
         writer = await rt.persistence.open(id, 'write')
         if (JSON.stringify(writer.header) !== JSON.stringify(header)) refuse('identity-changed', 'Session identity changed while acquiring ownership.')
@@ -271,36 +308,64 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
       }
       await inactive(id)
       cold(id)
+      // Finish fallible preparation before changing global archive/pin state.
+      // The writer lease already prevents a new resume from acquiring storage.
+      phase = 'validate'
+      const verified = await locate(rt, id, header)
+      if (JSON.stringify(verified) !== JSON.stringify(target)) refuse('storage-changed', 'Session storage changed during deletion.')
+      const path = await cachePath(rt, id)
+      if (snapshot !== undefined) {
+        phase = 'archive'
+        archiveAttempted = true
+        await ctx.workspaceRegistry.archiveSession(id, {})
+      }
+      await inactive(id) // archive skips checking already-archived IDs
+      cold(id)
       if (snapshot !== undefined && !ctx.workspaceRegistry.archivedSessionIds.includes(id)) {
         refuse('archive-changed', 'The session was restored during deletion; retry.')
       }
+      // Prepared: protect BEFORE any await that could admit a delayed put or
+      // attach. An unused, newly acquired fence can be released on rejection;
+      // once it intercepted work, restarting/retrying is the only safe escape.
+      newProtection = !rt.blocked.has(id)
+      protection = rt.blocked.get(id) ?? { intercepted: false }
+      rt.blocked.set(id, protection)
       if (header !== undefined && saved.record === undefined) {
         phase = 'journal'
         await checkPath(saved.folder, 'dir')
         await fs.mkdir(saved.folder, { recursive: true, mode: 0o700 })
         await checkPath(saved.folder, 'dir')
         const handle = await fs.open(saved.path, 'wx', 0o600)
+        journalCreated = true
         try {
           await handle.writeFile(JSON.stringify({ version: 1, header }))
           await handle.sync()
         } finally { await handle.close() }
       }
       phase = 'files'
-      destructive = true
-      rt.blocked.add(id)
+      // Recheck the target directory after preparation awaits, without
+      // repeating the project-root traversal. No data mutation has begun.
+      if (JSON.stringify(await logFiles(target.path)) !== JSON.stringify(target.files)) {
+        refuse('storage-changed', 'Session storage changed during deletion.')
+      }
+      await inactive(id)
+      cold(id)
+      if (snapshot !== undefined && !ctx.workspaceRegistry.archivedSessionIds.includes(id)) {
+        refuse('archive-changed', 'The session was restored during deletion; retry.')
+      }
+      const beginCleanup = () => { destructive = true }
       const currentName = header?.version === 0 ? 'session.jsonl' : `session.v${header?.version}.jsonl`
       const current = target.files.find(file => file === currentName || file === `${currentName}.zstd`)
-      const verified = await locate(rt, id, header)
-      if (JSON.stringify(verified) !== JSON.stringify(target)) refuse('storage-changed', 'Session storage changed during deletion.')
       // Keep the current artifact until last: earlier failures remain
       // write-openable for a retry. No recursive deletion of unknown files.
       for (const file of target.files.filter(file => file !== current).concat(target.files.includes(current) ? [current] : [])) {
-        await unlinkFile(join(target.path, file))
+        await unlinkFile(join(target.path, file), beginCleanup)
       }
       // Retain session.lock and its directory. Removing a POSIX lock inode
       // forfeits exclusion. These contain no conversation data.
       phase = 'cache'
-      const path = await cachePath(rt, id)
+      await cachePath(rt, id)
+      beginCleanup() // table.delete may commit before a failing observer returns
       await rt.table.delete(id)
       await unlinkFile(path) // invalid/unloaded disk-only cache record
       if (rt.table.get(id) !== undefined) refuse('cache-not-removed', 'The cache still contains this session.')
@@ -324,21 +389,49 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
       await ctx.parallel('api-session/removed', id)
       return { status: 200, body: { ok: true, state: snapshot === undefined && saved.record === undefined ? 'already-absent' : 'deleted', sessionId: id } }
     } catch (error) {
+      if (writer !== undefined) {
+        const ownedWriter = writer
+        writer = undefined
+        try { await ownedWriter.close() } catch (closeError) {
+          releaseFailed = true
+          protection = rt.blocked.get(id) ?? { intercepted: false }
+          rt.blocked.set(id, protection)
+          ctx.logger.warn(JSON.stringify({ plugin: 'dsh-session-delete', sessionId: id,
+            phase: 'release-after-failure', error: closeError?.code ?? closeError?.name }))
+        }
+      }
+      // Only our unused preparation can be unwound. Existing recovery/fence
+      // state and intercepted work are evidence that release is not safe.
+      if (!destructive && !recovering && !releaseFailed && newProtection && !protection.intercepted) {
+        try {
+          if (journalCreated) await unlinkFile(saved.path)
+          // An intercepted put/attach can run during asynchronous journal removal.
+          if (!protection.intercepted) rt.blocked.delete(id)
+        } catch (cleanupError) {
+          ctx.logger.warn(JSON.stringify({ plugin: 'dsh-session-delete', sessionId: id,
+            phase: 'release-preparation', error: cleanupError?.code ?? cleanupError?.name }))
+        }
+      }
+      // rc.2 serializes writes but exposes no revision/CAS or archive owner.
+      // A successful no-op archive by another client is unobservable. Never
+      // unarchive (or re-pin) here and erase a concurrent user's decision.
+      let archived = null
+      try { archived = ctx.workspaceRegistry.archivedSessionIds.includes(id) } catch {}
       const owned = error?.name === 'SessionAlreadyOwnedError'
-      const code = error instanceof Refusal ? error.code : owned ? 'session-owned' : `${phase}-failed`
+      const active = error?.name === 'WorkspaceActiveSessionError'
+      const code = error instanceof Refusal ? error.code : owned ? 'session-owned' : active ? 'session-active' : `${phase}-failed`
       ctx.logger.warn(JSON.stringify({ plugin: 'dsh-session-delete', sessionId: id, phase, error: code, cause: error?.code ?? error?.name }))
-      return { status: error instanceof Refusal ? error.status : owned ? 409 : 500, body: {
-        ok: false, state: destructive ? 'partial' : 'rejected', error: code, phase, sessionId: id,
-        message: error instanceof Refusal ? error.message : owned
+      return { status: error instanceof Refusal ? error.status : owned || active ? 409 : 500, body: {
+        ok: false, state: destructive || recovering ? 'partial' : 'rejected', error: code, phase, sessionId: id,
+        dataState: destructive || recovering || (saved === undefined && rt?.blocked.has(id)) ? 'uncertain' : 'preserved',
+        archive: { before: archiveBefore ?? null, after: archived,
+          restoration: archiveAttempted && archiveBefore === false && archived !== false ? 'unsupported' : 'not-needed' },
+        protection: rt?.blocked.has(id) ? 'retained' : 'none',
+        releaseFailed,
+        message: error instanceof Refusal ? error.message : active ? 'This session still has active work. Wait for it to finish.' : owned
           ? 'Session storage is still owned by a writer. Wait for it to close, then retry.'
           : 'Deletion could not complete. Retry after resolving the Host error.',
       } }
-    } finally {
-      if (writer !== undefined) {
-        try { await writer.close() } catch (error) {
-          ctx.logger.warn(JSON.stringify({ plugin: 'dsh-session-delete', sessionId: id, phase: 'release-after-failure', error: error?.code ?? error?.name }))
-        }
-      }
     }
   }
 
@@ -356,18 +449,34 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
     // Do not resume interrupted destructive work automatically. Only clean
     // bookkeeping for absent, unambiguous IDs; I/O errors preserve markers.
     if (!singleHost) return
-    for (const id of [...ctx.workspaceRegistry.archivedSessionIds]) {
+    const candidates = new Set(ctx.workspaceRegistry.archivedSessionIds)
+    try {
+      // A client may have restored an unfinished ID, or journal cleanup may
+      // have failed after unarchive. Recover those fences too, without a
+      // recursive scan or automatic data deletion.
+      for (const entry of await entries(join(adapter().root, '.dsh-session-delete'))) {
+        const id = entry.name.endsWith('.json') ? entry.name.slice(0, -5) : undefined
+        if (validSessionId(id)) candidates.add(id)
+      }
+    } catch (error) {
+      ctx.logger.warn(JSON.stringify({ plugin: 'dsh-session-delete', phase: 'recovery-scan', error: error?.code ?? error?.name }))
+      return
+    }
+    for (const id of candidates) {
       if (closed) break
       if (!validSessionId(id) || inflight.has(id) || pruning.has(id)) continue
       const operation = (async () => {
         try {
           const rt = adapter()
-          if ((await journal(rt, id)).record !== undefined) return
+          if ((await journal(rt, id)).record !== undefined) {
+            rt.blocked.set(id, rt.blocked.get(id) ?? { intercepted: false })
+            return
+          }
           await inactive(id)
           cold(id)
           if (await rt.persistence.stat(id) !== undefined) return
           if ((await locate(rt, id)).files.length > 0) return
-          rt.blocked.add(id)
+          rt.blocked.set(id, rt.blocked.get(id) ?? { intercepted: false })
           await detachWorkspaces(id)
           await ctx.workspaceRegistry.unarchiveSession(id)
         } catch (error) {
