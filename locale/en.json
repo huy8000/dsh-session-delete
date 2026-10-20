@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Delete Session",
-    "description": "Permanently delete a conversation from the sidebar, including its log and cache."
+    "description": "Permanently delete inactive cold sessions; refuse live sessions without a safe teardown capability."
   },
   "action": {
     "label": "Delete session",

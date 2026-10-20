@@ -17,6 +17,16 @@ window.__ModuleLoader__.load({
       confirm: '删除',
       busy: '正在删除…',
       failed: '删除失败',
+      active: '这个会话还有进行中的工作，请等它结束后再删除。',
+      owned: '会话存储仍由写入者占用，可能正在关闭。请等待写入者释放后重试，不要删除锁文件。',
+      liveUnsupported: 'DSH 尚未提供可安全卸载此 live 会话的接口。请重启 Host，在打开该会话前重试删除。',
+      unsafePath: '会话存储位置或目录结构无法安全确认，已拒绝删除。请检查 Host 日志。',
+      unsupported: '当前 DSH 版本或存储接口未经验证，已拒绝删除。',
+      exclusiveStorage: '尚未确认存储目录由单个 Host 独占，已拒绝删除。只有部署确实满足该条件时才能配置 singleHost: true；共享存储不受支持。',
+      hostFailed: 'Host 未能完成删除。请排除存储或 Workspace 错误后重试。',
+      partial: '删除已部分执行，不能撤销。清理尚未全部完成，请排除错误后重试。',
+      syncFailed: 'Host 已确认删除，但客户端同步失败。请重试刷新或重新加载页面。',
+      retrySync: '重试刷新',
     }
 
     const en = {
@@ -28,6 +38,16 @@ window.__ModuleLoader__.load({
       confirm: 'Delete',
       busy: 'Deleting…',
       failed: 'Delete failed',
+      active: 'This session still has active work. Wait for it to finish.',
+      owned: 'Session storage is still owned by a writer, possibly closing. Wait for ownership to be released; do not delete the lock file.',
+      liveUnsupported: 'DSH provides no safe unload API for this live session. Restart the Host, then retry before opening the session.',
+      unsafePath: 'The storage location or structure could not be verified. Deletion was refused. Check the Host log.',
+      unsupported: 'This DSH version or storage interface is unverified. Deletion was refused.',
+      exclusiveStorage: 'Exclusive single-Host storage has not been declared. Deletion was refused. Configure singleHost: true only when this deployment meets that condition; shared storage is unsupported.',
+      hostFailed: 'The Host could not complete deletion. Resolve storage or Workspace errors, then retry.',
+      partial: 'Deletion partially completed and cannot be undone. Cleanup is incomplete; resolve the error and retry.',
+      syncFailed: 'The Host confirmed deletion, but client synchronization failed. Retry refresh or reload the page.',
+      retrySync: 'Retry refresh',
     }
 
     /** Resolved through the host locale service once the plugin applies. */
@@ -59,6 +79,7 @@ window.__ModuleLoader__.load({
 .dsd_body{display:flex;flex-direction:column;min-width:0;padding:0 24px}
 .dsd_warning{display:flex;align-items:flex-start;gap:10px;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
 .dsd_warning p{margin:0}
+.dsd_sessionTitle{margin:0 0 12px;font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;max-height:132px;overflow:auto;white-space:pre-wrap}
 .dsd_warningIcon{flex:none;margin-top:2px;color:var(--dsw-alias-state-error-primary)}
 .dsd_error{margin-top:12px;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary)}
 .dsd_footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 24px}
@@ -149,15 +170,9 @@ window.__ModuleLoader__.load({
     const listeners = new Set()
     let pending = null
 
-    /**
-     * The Host unloads a live Session before deleting its files, which emits
-     * `api-session/removed` and lets the list drop the row. Pull the baseline
-     * again for a cold Session, then remove the local summary as a fallback:
-     * the Client may still hold a resident row for a Host generation that is
-     * slow to dispose. `handleSessionRemoved` exists on the Session Controller
-     * and is what the real removal event calls.
-     */
-    let forgetSession = async () => {}
+    // The Host emits api-session/removed only after complete cleanup. A local
+    // replay after confirmed success also covers the response/event ordering.
+    let forgetSession = async () => { throw new Error('Session controller unavailable') }
 
     function setPending(next) {
       pending = next
@@ -175,7 +190,7 @@ window.__ModuleLoader__.load({
       return value
     }
 
-    async function requestDelete(sessionId, displayTitle) {
+    async function requestDelete(sessionId) {
       let message = t('failed')
       try {
         const response = await fetch(ROUTE, {
@@ -184,20 +199,23 @@ window.__ModuleLoader__.load({
           credentials: 'same-origin',
           body: JSON.stringify({ sessionId }),
         })
-        if (response.ok) {
+        const body = await response.json()
+        if (response.ok && body?.ok === true && body.sessionId === sessionId
+          && ['deleted', 'already-absent'].includes(body.state)) {
           try {
             await forgetSession(sessionId)
-          } catch (error) {
-            console.warn('dsh-session-delete: removing the deleted row from the sidebar failed', error)
+          } catch {
+            return { ok: false, deleted: true, message: t('syncFailed') }
           }
           return { ok: true }
         }
-        try {
-          const body = await response.json()
-          if (typeof body?.message === 'string' && body.message !== '') message = body.message
-        } catch {
-          message = `${t('failed')}: HTTP ${response.status} (${displayTitle})`
-        }
+        const key = body?.error === 'session-active' ? 'active'
+          : body?.error === 'session-owned' ? 'owned'
+          : body?.error === 'live-unload-unsupported' ? 'liveUnsupported'
+          : ['unsafe-path', 'ambiguous-session', 'storage-unknown', 'identity-changed'].includes(body?.error) ? 'unsafePath'
+          : body?.error === 'unsupported-runtime' ? 'unsupported'
+          : body?.error === 'exclusive-storage-unverified' ? 'exclusiveStorage' : 'hostFailed'
+        message = `${body?.state === 'partial' ? t('partial') + ' ' : ''}${t(key)}`
       } catch (error) {
         message = `${t('failed')}：${error instanceof Error ? error.message : String(error)}`
       }
@@ -208,14 +226,7 @@ window.__ModuleLoader__.load({
     // Menu row
     // ---------------------------------------------------------------------
     function DeleteSessionMenuItem({ sessionId, displayTitle, useMenuOpenState }) {
-      const closeMenu = () => {
-        try {
-          const state = typeof useMenuOpenState === 'function' ? useMenuOpenState() : undefined
-          if (Array.isArray(state) && typeof state[1] === 'function') state[1](false)
-        } catch {
-          /* the menu also closes on pointer leave */
-        }
-      }
+      const [, setMenuOpen] = useMenuOpenState()
 
       return h(
         React.Fragment,
@@ -231,7 +242,8 @@ window.__ModuleLoader__.load({
               role: 'menuitem',
               className: 'dsd_item',
               onClick: () => {
-                closeMenu()
+                setMenuOpen(false)
+                if (pending !== null) return
                 setPending({ sessionId, displayTitle })
               },
             },
@@ -249,7 +261,12 @@ window.__ModuleLoader__.load({
       const request = usePendingDelete()
       const [busy, setBusy] = React.useState(false)
       const [error, setError] = React.useState(null)
+      const [deleted, setDeleted] = React.useState(false)
       const dialogRef = React.useRef(null)
+      const busyRef = React.useRef(false)
+      const titleId = React.useId()
+      const bodyId = React.useId()
+      const sessionTitleId = React.useId()
 
       const open = request !== null
       const sessionKey = request?.sessionId
@@ -257,10 +274,12 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!open) return undefined
         setBusy(false)
+        busyRef.current = false
+        setDeleted(false)
         setError(null)
         const previous = document.activeElement
         const node = dialogRef.current
-        if (node !== null) node.focus()
+        if (node !== null) (node.querySelector('[data-delete-cancel]') ?? node).focus()
         return () => {
           if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
         }
@@ -269,24 +288,48 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!open) return undefined
         const onKeyDown = (event) => {
-          if (event.key !== 'Escape' || busy) return
-          event.preventDefault()
-          setPending(null)
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            if (!busyRef.current) setPending(null)
+          } else if (event.key === 'Tab') {
+            const node = dialogRef.current
+            const buttons = node === null ? [] : [...node.querySelectorAll('button:not(:disabled)')]
+            const first = buttons[0]
+            const last = buttons[buttons.length - 1]
+            if (first === undefined) {
+              event.preventDefault()
+              node?.focus()
+            } else if (!node.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)
+              || (!event.shiftKey && document.activeElement === last)) {
+              event.preventDefault()
+              ;(event.shiftKey ? last : first).focus()
+            }
+          }
         }
         document.addEventListener('keydown', onKeyDown)
         return () => document.removeEventListener('keydown', onKeyDown)
-      }, [open, busy])
+      }, [open])
 
       if (!open) return null
 
       const confirm = async () => {
-        if (busy) return
+        if (busyRef.current) return
+        busyRef.current = true
         setBusy(true)
         setError(null)
-        const result = await requestDelete(request.sessionId, request.displayTitle)
+        let result
+        if (deleted) {
+          try { await forgetSession(request.sessionId); result = { ok: true } }
+          catch { result = { ok: false, deleted: true, message: t('syncFailed') } }
+        } else result = await requestDelete(request.sessionId)
+        busyRef.current = false
         setBusy(false)
         if (result.ok) setPending(null)
-        else setError(result.message)
+        else {
+          setDeleted(result.deleted === true)
+          setError(result.message)
+        }
       }
 
       return h(
@@ -300,7 +343,7 @@ window.__ModuleLoader__.load({
             className: 'dsd_mask',
             'aria-hidden': 'true',
             onClick: () => {
-              if (!busy) setPending(null)
+              if (!busyRef.current) setPending(null)
             },
           }),
           h(
@@ -310,7 +353,9 @@ window.__ModuleLoader__.load({
               tabIndex: -1,
               role: 'dialog',
               'aria-modal': 'true',
-              'aria-label': t('title'),
+              'aria-labelledby': titleId,
+              'aria-describedby': `${sessionTitleId} ${bodyId}`,
+              'aria-busy': busy,
               className: 'dsd_dialog',
             },
             h(
@@ -319,15 +364,16 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'dsd_header' },
-                h('h2', { className: 'dsd_title' }, t('title')),
+                h('h2', { className: 'dsd_title', id: titleId }, t('title')),
                 h(
                   'button',
                   {
                     type: 'button',
                     className: 'dsd_close',
                     'aria-label': t('close'),
+                    disabled: busy,
                     onClick: () => {
-                      if (!busy) setPending(null)
+                      if (!busyRef.current) setPending(null)
                     },
                   },
                   h(CloseIcon, null),
@@ -336,11 +382,12 @@ window.__ModuleLoader__.load({
               h(
                 'div',
                 { className: 'dsd_body' },
+                h('p', { className: 'dsd_sessionTitle', id: sessionTitleId }, request.displayTitle || request.sessionId),
                 h(
                   'div',
                   { className: 'dsd_warning' },
                   h('span', { className: 'dsd_warningIcon' }, h(WarningIcon, null)),
-                  h('p', null, t('warning')),
+                  h('p', { id: bodyId }, t('warning')),
                 ),
                 error === null ? null : h('div', { className: 'dsd_error', role: 'alert' }, error),
               ),
@@ -354,7 +401,8 @@ window.__ModuleLoader__.load({
                   type: 'button',
                   className: 'dsd_button dsd_outline dsd_action',
                   disabled: busy,
-                  onClick: () => setPending(null),
+                  'data-delete-cancel': true,
+                  onClick: () => { if (!busyRef.current) setPending(null) },
                 },
                 t('cancel'),
               ),
@@ -367,7 +415,7 @@ window.__ModuleLoader__.load({
                   onClick: confirm,
                   'data-modal-autofocus': true,
                 },
-                busy ? t('busy') : t('confirm'),
+                busy ? t('busy') : deleted ? t('retrySync') : t('confirm'),
               ),
             ),
           ),
@@ -378,41 +426,17 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'sessions'],
       apply(ctx) {
-        try {
-          const sessions = ctx.sessions ?? (typeof ctx.get === 'function' ? ctx.get('sessions') : undefined)
-          if (sessions !== undefined) {
-            const refresh = typeof sessions.refresh === 'function' ? () => sessions.refresh() : async () => {}
-            const removeLocal =
-              typeof sessions.handleSessionRemoved === 'function'
-                ? (id) => sessions.handleSessionRemoved(id)
-                : () => {}
-            const workspaces = typeof ctx.get === 'function' ? ctx.get('workspaces') : undefined
-            const unarchive =
-              workspaces !== undefined && typeof workspaces.unarchiveSession === 'function'
-                ? (id) => workspaces.unarchiveSession(id)
-                : async () => {}
-            forgetSession = async (id) => {
-              try {
-                await refresh()
-              } catch (error) {
-                console.warn('dsh-session-delete: session list refresh failed', error)
-              }
-              // Only clear the archive marker once the Host no longer lists the
-              // Session: a live Session that failed to unload must stay archived
-              // rather than turn into an unopenable normal row.
-              const stillListed = sessions.list.getSnapshot().byId[id] !== undefined
-              removeLocal(id)
-              if (!stillListed) {
-                try {
-                  await unarchive(id)
-                } catch (error) {
-                  console.warn('dsh-session-delete: clearing the archive marker failed', error)
-                }
-              }
-            }
-          }
-        } catch (error) {
-          console.warn('dsh-session-delete: session controller unavailable; sidebar may keep the deleted row until reload', error)
+        const sessions = ctx.sessions
+        if (typeof sessions?.handleSessionRemoved !== 'function' || typeof sessions?.refresh !== 'function') {
+          throw new Error('dsh-session-delete: unsupported Session Controller')
+        }
+        forgetSession = async (id) => {
+          // Record removal BEFORE joining a possibly older list pull: rc.2's
+          // mutation journal applies it over that pull's stale baseline.
+          sessions.handleSessionRemoved(id)
+          await sessions.refresh()
+          const list = sessions.list.getSnapshot()
+          if (list.phase !== 'ready' || list.byId[id] !== undefined) throw new Error('Session list refresh failed')
         }
 
         try {
