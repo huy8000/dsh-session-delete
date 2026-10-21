@@ -4,7 +4,7 @@
 
 在会话行的操作菜单中选择 **删除会话**，核对名称后点击 **永久删除**。正在执行任务的会话会被拒绝删除，插件不会强制停止任务。
 
-> 删除后无法恢复。当前版本为 **1.1.0-rc.1**，仅支持 DSH **0.2.1-rc.2**，仍处于预发布阶段。
+> 删除后无法恢复。当前正式版本为 **1.1.0**，仅支持 DSH **0.2.1-rc.2**。下载与更新说明见 [v1.1.0 Release](https://github.com/huy8000/dsh-session-delete/releases/tag/v1.1.0)。
 
 ## 兼容性
 
@@ -97,7 +97,7 @@ CI 在 Linux/macOS、Node.js 22.19.0/24 上执行语法和 npm 打包检查。�
 
 ## English
 
-Adds **Delete session** to the DeepSeek Harness sidebar with Chinese and English UI. Version **1.1.0-rc.1** supports DSH **0.2.1-rc.2** only and remains a prerelease.
+Adds **Delete session** to the DeepSeek Harness sidebar with Chinese and English UI. The **1.1.0** release supports DSH **0.2.1-rc.2** only. See the [release and downloads](https://github.com/huy8000/dsh-session-delete/releases/tag/v1.1.0).
 
 Stock DSH supports deletion of unloaded idle sessions. Deleting a loaded idle session requires the separate [lifecycle patch](patches/README.md); updating this plugin alone does not patch DSH. Running tasks, maintenance, pending input and unsupported owners are refused without forced cancellation.
 

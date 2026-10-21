@@ -38,4 +38,4 @@ DSH_GATE_CONCURRENCY=1 DSH_GATE_FAIL_FAST=1 pnpm run build
 
 完整类型检查和 bundle 构建阻塞已解除。随后已完成本地 Desktop 模块替换和启动检查，详见 Desktop 记录。这是对现有应用包的局部替换，不是重新生成官方安装程序。
 
-仍使用 rc.2 的私有缓存/Workspace 适配；fire-and-forget 的第三方后台任务不属于 returned-Promise 完成语义；多个 Host 共享存储不受支持。补丁不提供存储事务、跨进程删除租约或底层 provider remove 接口。保留候选版本 `1.1.0-rc.1`。
+仍使用 rc.2 的私有缓存/Workspace 适配；fire-and-forget 的第三方后台任务不属于 returned-Promise 完成语义；多个 Host 共享存储不受支持。补丁不提供存储事务、跨进程删除租约或底层 provider remove 接口。插件正式版为 `1.1.0`，以上兼容性与存储限制保持不变。

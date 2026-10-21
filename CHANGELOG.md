@@ -1,6 +1,35 @@
 # Changelog
 
-## 1.1.0-rc.1 — unreleased prerelease candidate
+## 1.1.0 — 2026-10-21
+
+- Support permanent deletion of unloaded idle sessions on stock DSH
+  0.2.1-rc.2, and ordinary loaded idle sessions with the included, separate
+  lifecycle source patch. Active work is refused without cancellation.
+- Wait for owner teardown, Flush and returned disposal promises before file
+  cleanup. Preserve data on required lifecycle failure; keep cache and
+  Workspace write protection, per-session request joining and retry state.
+- Restrict deletion to verified storage paths and recognized files. Report
+  partial cleanup and unknown outcomes explicitly; notify clients only after
+  successful cleanup and offer refresh-only retry for synchronization errors.
+- Improve bilingual confirmation copy, title presentation, failure details,
+  focus handling, scrolling and button spacing.
+- Rewrite installation, compatibility, recovery and verification documentation.
+  Include the pinned DSH source patch in the package and release assets.
+- Retain syntax/package CI checks. The automated test suite was removed at
+  the maintainer's request; runtime acceptance evidence is recorded separately.
+
+Compatibility: DSH **0.2.1-rc.2** only; `singleHost: true` requires exclusive
+single-Host storage. Loaded-session deletion requires the separate patch.
+Shared storage, unsupported owners and untracked third-party background writes
+are outside the supported scope. Deletion is permanent and not transactional.
+
+Verification: actual patched Desktop idle deletion and restart persistence;
+isolated official Host checks on Node 22/24; official upstream build (9 gates);
+latest dialog preview in Chinese/English including long titles and Escape.
+The latest dialog layout has not had a new Desktop regression run. This release
+does not turn the historical automated test results into a current test suite.
+
+## 1.1.0-rc.1 — development history (not separately released)
 
 Maintenance update:
 
