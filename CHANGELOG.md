@@ -2,6 +2,50 @@
 
 ## 1.1.0-rc.1 — unreleased prerelease candidate
 
+Maintenance update:
+
+- Simplify the bilingual delete dialog copy, distinguish the conversation
+  title from the warning, tighten action widths and group failure details.
+  Omit the routine unarchived status without hiding partial/unknown outcomes.
+
+- Complete the pinned upstream official build using its original Project
+  References: all 9 build gates pass. Remove the earlier temporary typecheck
+  blocker; keep the candidate version unchanged.
+- Fix setup-counter typing, disposal error aggregation and public error-code
+  documentation; scoped type-aware lint and export JSDoc checks pass.
+- Verify the official built Host under Node 22/24, including disposal failure
+  preserving logs/accounting and safe retry after restart.
+
+- Remove the automated test suite, fixtures, test-only dependencies, npm test
+  script and CI test step at the maintainer's request. Keep syntax and package
+  checks. Test counts below describe historical runs, not the current tree.
+- Add a pinned local DSH idle-retirement patch and integrate its public
+  owner-delegated completion API. Ordinary loaded idle Agents can now be
+  deleted on the patched Host; active turns, maintenance and pending input
+  are refused without cancellation. Stock Desktop remains cold-only.
+- Await Flush, owner teardown and returned disposal promises; hold same-ID
+  input/publication admission and defer removal notification until cleanup.
+- Verify loaded idle deletion, busy refusals, held disposal, Flush failure,
+  repeated/concurrent requests and restart retry in an isolated Web Host.
+  This is local runtime verification, not a Desktop build/release.
+- Simplify the README and state the patched and stock Host behavior.
+
+Third-stage acceptance (same candidate version):
+
+- Fix real-browser focus loss on dismissal: remember the menu-opening control;
+  when rc.2 hides its action strip, focus its connected tree row and restore
+  its original tab order on blur. Do not focus a disconnected trigger.
+- Bound the dialog height and allow scrolling in short/narrow viewports;
+  verified keyboard access to the footer at 360×240.
+- Add three focused component regressions (77 total). Validate isolated real
+  Web cold deletion, two clients, refusals, network uncertainty, storage fault
+  recovery, bilingual themes and restart persistence. Desktop regression and
+  other unexecuted scenarios remain explicitly unverified.
+- Expand the owner/admission/storage lifecycle proposal, with an English issue
+  draft and staged upstream PR/test plan. No upstream submission or release.
+
+Earlier work in this candidate:
+
 - Acquire the cold writer lease, Flush and validate paths before archiving,
   preserving archive/pin state on those failures. Report observed archive
   state when rc.2 cannot safely perform a conditional rollback.

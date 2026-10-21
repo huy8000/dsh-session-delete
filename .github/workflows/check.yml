@@ -20,7 +20,5 @@ jobs:
       - run: npm ci
       - name: Syntax check
         run: npm run check
-      - name: Behavior and upstream integration tests
-        run: npm test
       - name: Package check
         run: npm run pack:check

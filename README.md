@@ -1,45 +1,32 @@
 # dsh-session-delete
 
-为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 侧栏提供永久删除操作，保留原有菜单位置、确认流程和中英文界面。
+为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的侧栏会话菜单增加**永久删除**操作，支持中文和英文。
 
-**当前版本为 `1.1.0-rc.1`，仅供独占存储环境的预发布验证，尚不满足完整的 `1.1.0` 发布条件。**
+在会话行的操作菜单中选择 **删除会话**，核对名称后点击 **永久删除**。正在执行任务的会话会被拒绝删除，插件不会强制停止任务。
 
-> 删除不可恢复。插件没有回收站，也不删除导出副本、外部备份或第三方插件保存的数据。先备份重要对话。所有开发测试必须使用隔离临时目录，禁止使用真实用户 `~/.dsh` 做删除测试。
+> 删除后无法恢复。当前版本为 **1.1.0-rc.1**，仅支持 DSH **0.2.1-rc.2**，仍处于预发布阶段。
 
-## 支持范围与发布阻塞
+## 兼容性
 
-- 仅核对并自动化验证 DSH **`0.2.1-rc.2`**，对应上游提交 `687f282e8625c6b8d11ff58211a90524be2e4317`。不再声称整个 `<0.3.0` 范围兼容。
-- 使用 JSONL Session Persistence 与 JSON per-record Projection Cache；支持未压缩及 `.zstd` 日志。实际位置取自正在运行的存储实例，不根据 `process.env.DSH_HOME` 猜测，因此也支持 DSH 正确配置后的自定义路径。
-- **只删除不活动的冷会话。live 会话明确拒绝删除**，不会停止任务，也不会调用私有 `liveEntryFor()`。上游没有向本插件提供现有 Agent 的官方销毁句柄；Session detach 也不等待异步 disposed 观察者完成。重启 Host，在打开目标会话之前重试，可以让普通历史会话成为冷会话。启动时自动创建的 live 会话仍可能无法删除。
-- 缓存和 Workspace 仍需要限定版本的私有适配；缺失、被替换或不能核实版本时拒绝。详见 [上游审查记录](docs/upstream-audit.md)。部分布局没有必需服务时插件不会加载。
-- **仅面向一个 Host 独占存储目录的部署。共享目录、多 Host 同时运行不受支持。未显式配置 `singleHost: true` 时默认拒绝磁盘删除和启动归档清理。** DSH 写句柄能排除其他进程的 Session 写入，但不能排除另一 Host 的冷读缓存回写或 Workspace 写入；插件无法可靠检测所有此类进程，因此不能声称跨进程删除完全安全。此边界也是公开发布前仍需解决的问题。
-- 本轮 macOS、Node `24.12.0` / `22.19.0` 各通过 74 项自动化测试。基线 `e4077a3` 的 Linux/macOS × Node 22.19/24 四个 CI 任务已成功；新候选须按具体提交 SHA 查看 [GitHub Actions](https://github.com/huy8000/dsh-session-delete/actions)，不能用基线或本地结果替代。上一轮真实 Desktop 隔离实测见 [记录](docs/desktop-smoke-test.md)，不代替本轮完整 UI 验收。Web/多客户端和 Windows 未验证。
+| 会话状态 | 原版 DSH | 安装本仓库生命周期补丁的 DSH |
+|---|---|---|
+| 未加载的空闲历史会话 | 可以删除 | 可以删除 |
+| 已打开或已恢复的空闲会话 | 拒绝删除 | 标准 Agent 会话安全关闭后删除 |
+| 任务执行中、维护中或有待处理输入 | 拒绝删除 | 拒绝删除 |
 
-## 安装与使用
+**只安装插件不会给 DSH 增加关闭会话的能力。** 要删除已加载的空闲会话，需要额外应用 [DSH 生命周期补丁](patches/README.md)。补丁针对固定版本源码，尚未合入上游；不支持关闭的第三方 Agent 会明确拒绝删除。
 
-本修复候选请先在临时 `DSH_HOME` 中验证，不建议直接替换唯一数据副本的环境。
+所有删除都要求单个 DSH Host 独占会话、缓存和工作区存储。多个 Desktop、Web 或 CLI 实例共用一套存储不受支持。
 
-在 DSH **Plugins → Add plugin** 输入本仓库的本地绝对路径，Install → Enable，重启 Host。也可通过以下仓库地址安装；请核对所选 ref，`main` 的修复候选与历史 `1.0.0` 代码行为不同：
+## 安装
+
+在 DSH 的插件页面添加本地仓库路径，或使用 Git 地址：
 
 ```text
 git+https://github.com/huy8000/dsh-session-delete.git
 ```
 
-CLI 安装示例（先启动过 Desktop profile，然后完全退出 Desktop）：
-
-```sh
-dsh plugin --profile desktop add "git+https://github.com/huy8000/dsh-session-delete.git"
-```
-
-CLI 安装依赖后仍需在插件页启用 bundle 并重启。不要绕过 DSH 的版本限制。若包管理布局使插件无法解析 DSH 的版本元信息，删除会返回 `unsupported-runtime`，应修复安装布局而非取消校验。
-
-在临时实例确认只有一个 Host 使用 Session、Cache 和 Workspace 存储后，才在插件配置中设置：
-
-```yaml
-singleHost: true
-```
-
-bundle 默认值为 `false`。可在临时 profile 的 `cordis.patch.yml` 用以下 patch 覆盖插件配置，然后重启：
+启用插件后，在对应 Profile 的 `cordis.patch.yml` 中添加：
 
 ```yaml
 - id: dsh-session-delete
@@ -47,82 +34,78 @@ bundle 默认值为 `false`。可在临时 profile 的 `cordis.patch.yml` 用以
     singleHost: true
 ```
 
-这是部署者对存储独占条件的明确声明，并不是自动检测或跨进程锁。只有部署本身保证没有其他 Desktop、Web、CLI Host 或其他进程访问这些 Session、Cache、Workspace 目录时，才可以设置为 true。DSH 没有官方的全存储独占凭据，扫描进程也无法证明这一点，插件不会自动启用。本轮没有改动真实用户 `~/.dsh`。
+Desktop 默认配置位于 `~/.dsh/profiles/desktop/cordis.patch.yml`；设置了 `DSH_HOME` 时使用对应目录。完成后重启 DSH Host；Desktop 用户可退出并重新打开应用。
 
-在会话行 `...` → **删除会话**，确认框会显示会话标题和不可恢复提示。进行中不能重复提交、关闭或更换目标；失败会保留错误信息。Host 删除完成但客户端刷新失败时，可单独重试刷新，不会再次提交删除。
+`singleHost` 默认关闭，关闭时插件不会执行删除。只有确认存储由一个 Host 独占后才应启用；这是使用者的声明，不会自动检测其他进程，也不提供跨进程保护。
 
-## 实际删除流程
+## 使用
 
-1. 校验 ID、已加载版本、服务结构和精确存储路径，并要求显式单 Host 部署声明。当前仅接受 `[A-Za-z0-9_-]{1,200}`；包含点、非 ASCII 等其他上游自定义 ID 明确拒绝，不声称这是 DSH 本身的完整 ID 规则。
-2. 独立调用 `workspace/session-activity`。普通与已归档会话均检查；存在任何活动或 live Session/Agent 就拒绝。
-3. 记录初始归档状态；先取得官方 `sessionPersistence.open(id, 'write')` 写所有权、Flush 并复核路径。写所有权、Flush 或这次路径检查失败，不会触发插件的归档，也不会丢掉原有置顶。
-4. **Prepared**：调用 `archiveSession(id, {})` 后独立复查活动和归档状态，建立按 ID 的缓存/Workspace 保护，保存最小恢复记录；再次检查目标目录。此时还没开始日志或缓存删除。rc.2 不提供归档条件回滚，之后若失败，返回当前归档状态，不自动 unarchive 或重新置顶以免覆盖其他客户端的操作。
-5. **Destructive**：检查通过后才调用第一个日志 unlink（无日志时为缓存删除）；只清理可信 Header 定位目录中已识别的 generation，当前日志最后删除。缓存通过现有 Domain/KvTable 队列清理磁盘与内存；较早排队的写入先完成，尚未到达 put 的迟到写入被保护拒绝。
-6. 等待插件取得的写句柄 Close，验证 Session 不在 live store 且 Persistence 不再返回目标，逐个等待 Workspace detach，清理 pin/archive，清除恢复记录，通过 Cordis `parallel` 分发 `api-session/removed` 并等待监听者结算（不等于浏览器接收确认）。
-7. 客户端仅接受明确的 Host 完成结果；使用 DSH 的移除处理和刷新。移除先于加入已有刷新，复用上游列表 mutation journal，防止旧结果恢复会话行。客户端不再负责 unarchive，也不在 Host 失败后假装本地删除成功。
+1. 打开侧栏会话行的操作菜单，选择 **删除会话**。
+2. 在确认框中核对会话名称和不可恢复提示。
+3. 点击 **永久删除**。成功后，会话从列表移除；删除当前查看的会话时，页面回到新会话入口。
 
-**没有固定时间等待。** 不活动并不等于可以安全卸载，所以 live 路径在第 2 步就拒绝，尚未实现原有“直接删除 live 会话”的目标。
+取消、Escape 或点击遮罩可以关闭尚未执行中的确认框。删除进行中会禁用重复提交和关闭操作。失败时保留确认框，分开显示失败原因及必要的数据状态。
 
-## 文件范围和保留内容
+## 删除范围
 
-```text
-<Session Persistence 实际 root>/<Header 对应 project>/<id>/session*.jsonl[.zstd]
-<Projection Cache 实际 domain 目录>/sessions/<id>.json
-```
+插件会清理目标会话的：
 
-仅删除上述已识别文件。遇到重复匹配目录、符号链接、硬链接、未知文件/子目录、元数据不一致或非 ENOENT I/O 错误会拒绝或报告部分失败，不扩大搜索和删除范围。目录检查只在 Session root 下扫描项目与目标 ID 两层。
+- 已识别的 JSONL 持久化日志。
+- 当前会话投影缓存。
+- Workspace 关联、置顶和归档记录。
 
-会保留 **`session.lock` 及空会话目录**。上游 POSIX 锁依赖稳定 inode；删除锁文件会破坏互斥，Windows 也未验证过整目录删除。本实现不以“整个目录消失”作为成功标准。
+用于上游写锁的 `session.lock` 和空目录会保留。工作区中的项目文件、导出副本、外部备份、附件及第三方插件数据不在清理范围内。
 
-恢复记录位于 `<Session root>/.dsh-session-delete/<id>.json`，仅保存 Header（可能包含项目路径），成功后清除。缓存后端保留的 `.json.bak.*`、导出文件、外部备份和第三方会话附件不在本次删除契约中；发现未知 Session 目录内容会拒绝，需人工检查。
+删除不是跨文件事务。路径不明、符号链接、异常存储结构、写入占用或无法确认的生命周期状态都会导致拒绝。共享存储和不遵守 DSH 生命周期的第三方后台写入不在支持范围内。
 
-## 结果、故障与重试
+## 删除失败时
 
-| 状态 | 含义与操作 |
+| 提示或情况 | 处理方式 |
 |---|---|
-| `deleted` | 约定的日志、当前缓存、关联、pin/archive 与恢复记录清理完成，已发布移除通知 |
-| `already-absent` | Session 已不存在，相关残留清理完成；重复请求可安全返回此状态 |
-| `rejected` | 本次未开始日志/缓存删除；若归档已成功，会明确返回当前归档状态。保护未被使用且准备记录成功清除时会释放，否则明确返回保留保护 |
-| `partial` | 已提交清理调用，或存在上次未完成的恢复记录；数据可能不完整，不代表每个失败都已经删掉文件。修复错误后重试同一 ID |
+| 会话正在运行 | 等待任务结束后重试；已归档也不代表没有活动任务 |
+| 当前 DSH 不支持关闭已加载会话 | 安装生命周期补丁，或重启 Host 后在重新打开目标会话前删除 |
+| 会话关闭或持久化失败 | 不继续文件删除；检查 DSH 日志，处理问题并重启 Host 后重试 |
+| 部分清理失败 | 数据可能已部分删除；排除存储或 Workspace 错误后重试同一会话 |
+| 请求中断或响应无效 | 结果未知；刷新核对，不能据此认为数据仍然完整 |
+| 已删除，但列表刷新失败 | 点击 **重试刷新**，只重试客户端同步 |
 
-错误包含稳定 `error`、`phase`、`dataState`、`archive.before/after/restoration`、`protection` 和 `releaseFailed`。归档状态是返回时观测值，不是有版本保护的承诺；`restoration: unsupported` 表示无法安全自动恢复，不能推断归档只由本插件改变。归档成功后可能已取消置顶，插件不会在失败时擅自重新置顶。日志只记录 ID、阶段和错误类别，不记录对话内容。
+同一 Host 内，同一会话的并发请求会合并处理。可安全重试清理，但这不等于删除具有原子性；必要步骤全部完成后才报告成功。
 
-`dataState: preserved` 只表示本次没有开始日志/缓存清理，不保证存储原本完整。已存在的恢复记录无法读取/解析时，不推断上次删除进度，返回 `uncertain` 并保留保护和证据，需人工检查 Host 日志及该记录。
+## 验证与限制
 
-断网、无效 JSON、响应缺少匹配的完成/失败结构均显示 **Host 结果未知**，不会声称数据保留或删除失败。请刷新核对，再按需重试同一 ID；Host 明确完成后只有客户端同步失败时，按钮才仅重试刷新。
+当前代码已有以下实测记录：
 
-同一服务实例中相同 ID 的同时请求共享一个操作；其他 ID 可以并行。启动仅清理确认不存在、没有恢复记录的孤儿归档关联，不自动继续破坏性工作。中断的删除保留恢复记录供显式重试；原 Header 与新 Session 不匹配会拒绝。操作不是事务，关闭浏览器不会取消已经接受的 Host 清理；突然退出 Host 的测试验证了可重试，但不承诺电源故障下的事务原子性。
+- 补丁版 Desktop 删除已打开的空闲会话：列表、日志、缓存及 Workspace 关联清理，重启后未回弹，其余对照日志哈希不变。
+- 隔离 Host 验证空闲删除、活动拒绝、持久化关闭失败时保留数据，以及失败后的重启重试。
+- 最新确认框使用实际客户端代码进行隔离预览，检查中文、英文长标题、活动拒绝提示和 Escape。新版排版尚未完成 Desktop 回归。
 
-准备失败且本次新建的保护没有拦截任何操作、写句柄成功关闭、准备记录成功清除时，会释放保护。已经拦截 put 或 Workspace 筛选、继承了旧保护、清理准备记录失败或无法确认写句柄释放时，保护保留并显示重试/重启指引；即使日志仍完整，Workspace 可见列表也可能被保护过滤。归档可通过 DSH 手动恢复，但恢复归档不会解除清理保护。
+详情见 [Desktop 记录](docs/desktop-smoke-test.md)、[验收报告](docs/execution-report.md) 和 [补丁说明](patches/README.md)。文档中的历史测试数量不代表当前仓库仍提供对应测试套件。
 
-不可逆清理或恢复尝试的保护保留至对应服务退出，包括禁用插件后。启动只遍历恢复记录目录一层，恢复有效记录的保护，不自动删除数据；有恢复记录的 ID 即使已被其他客户端恢复归档，也不会被当作普通孤儿清理。同一 Host 生命周期内不要重用已删除的 ID；存储或缓存热替换后需要重启。重启不会恢复已删除数据，也不会清除仍有效的恢复记录。
+目前仍依赖固定版本的部分内部缓存及 Workspace 接口，不保证其他 DSH 版本兼容。生命周期补丁只等待 DSH 能追踪的关闭工作和返回的 Promise，无法保证第三方脱离生命周期的后台任务已停止。本地 Desktop 补丁使用本机签名，后续官方更新可能覆盖它。
 
-目录的符号链接及硬链接会预检拒绝；Node 文件 API 无法提供跨平台 `openat` 式完整路径事务，因此不支持不可信本地进程在检查和 unlink 之间主动替换存储结构的环境。
-
-## 开发与验证
+## 开发检查
 
 ```sh
 npm ci
 npm run check
-npm test
 npm run pack:check
 ```
 
-无新增运行时第三方依赖。开发依赖固定上游模块版本，以 Node 原生 test runner 驱动真实持久化、原生写锁、Domain、Workspace、Connection、Session Controller 和 React 组件行为测试；测试使用临时目录并清理资源。React 测试渲染器会输出弃用提示，未将该提示视作浏览器验收。
+CI 在 Linux/macOS、Node.js 22.19.0/24 上执行语法和 npm 打包检查。自动化测试套件及其 CI 步骤已按维护要求移除；以上命令不验证删除行为。行为验收应使用隔离临时目录。
 
-覆盖冷会话、压缩日志、live 拒绝、两类活动会话、Flush/Close/文件/缓存/Workspace/归档故障、缓存迟到写入、跨进程写锁、进程中断恢复、并发/幂等、路径异常、自定义 root、孤儿标记与中英文组件行为。**安全卸载 live 会话尚未实现，测试断言的是保守拒绝，不是成功删除。** 详见 [测试与手动步骤](docs/testing.md)。
+上游接口分析及后续建议见 [源码审查](docs/upstream-audit.md)、[API 提案](docs/upstream-api-proposal.md) 和 [未提交的 Issue 草稿](docs/upstream-issue-draft.md)。
 
 ## English
 
-This **1.1.0-rc.1** prerelease is **not ready for the full 1.1.0 release** or general installation. It verifies only DSH **0.2.1-rc.2**. Inactive **cold** sessions can be deleted; live sessions are explicitly refused because the plugin has no official ownership capability to destroy their Agents and await all disposal writes. Restart the Host and retry before opening an ordinary historical session.
+Adds **Delete session** to the DeepSeek Harness sidebar with Chinese and English UI. Version **1.1.0-rc.1** supports DSH **0.2.1-rc.2** only and remains a prerelease.
 
-Deletion is irreversible. The exact recognized JSONL generations, current projection-cache record, Workspace accounting and pin/archive markers are cleaned. The stable `session.lock` inode and its directory are retained. Backups, exports and third-party artifacts are outside this contract. Unknown files, links, ambiguous paths, storage errors and unsupported interfaces fail closed.
+Stock DSH supports deletion of unloaded idle sessions. Deleting a loaded idle session requires the separate [lifecycle patch](patches/README.md); updating this plugin alone does not patch DSH. Running tasks, maintenance, pending input and unsupported owners are refused without forced cancellation.
 
-Write ownership, Flush and initial path revalidation precede archiving, so those failures preserve archive/pin state. rc.2 has no archive revision or compare-and-set rollback; later rejection reports the observed archive state instead of undoing another client's action. Preparation releases only a new unused fence after successful writer/journal cleanup. Exercised or inherited fences remain, even when no log was removed. Cleanup attempts or unfinished recovery return `partial`; retry the same ID. Lost/invalid responses mean **Host outcome unknown**, not confirmed failure or preservation. Per-session requests join in process; late cache writes/Workspace attachments remain fenced. No fixed sleep or private detach is used.
+Install from a local path or the Git URL above, enable the plugin, and declare `singleHost: true` in the Profile patch only when one Host exclusively uses the storage. Restart the Host afterward. Shared storage is unsupported; this setting does not detect or lock out other processes.
 
-The cache/Workspace adapters still access pinned private fields and keep their fences for the services' lifetimes, including plugin unload. Disk deletion is disabled by default. Set `singleHost: true` only for storage actually used by one Host; this is an operator declaration, not automatic detection. Shared directories/multiple Hosts and adversarial concurrent filesystem replacement remain unsupported. A Session write lease is not a global lock for caches or Workspace data. These limitations and the missing live teardown capability prevent claiming full release acceptance.
+Deletion permanently removes recognized session logs, the current projection cache and Workspace/pin/archive records. Lock files, empty directories, project files, attachments, exports, backups and third-party data remain. Partial cleanup is retryable but not atomic. A lost response means an unknown outcome; a confirmed deletion with a failed list refresh offers refresh-only retry.
 
-Install this working-tree candidate by its absolute local path in **Plugins → Add plugin**, enable it, and restart inside an isolated test home first. Run `npm ci`, `npm run check`, `npm test`, and `npm run pack:check`. See the audit and testing documents above for evidence and manual checks. Uninstalling the plugin does not restore deleted data.
+Basic checks are `npm ci`, `npm run check` and `npm run pack:check`. The automated test suite has been removed. These checks do not establish deletion correctness; see the linked acceptance records for actual runtime verification and its limits.
 
 ## License
 

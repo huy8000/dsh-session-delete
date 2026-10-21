@@ -1,0 +1,1013 @@
+diff --git a/docs/architecture.i18n.yaml b/docs/architecture.i18n.yaml
+index 8206f3e6..ed3c555e 100644
+--- a/docs/architecture.i18n.yaml
++++ b/docs/architecture.i18n.yaml
+@@ -18,8 +18,8 @@
+   en: b9eeb18645121a8b
+   zh: 70d87a12c43e042a
+ /deepseek-harness-architecture/core-packages:
+-  en: 20ef882e44b06a10
+-  zh: c10c3934ed5570e9
++  en: 6f315c6b70616ba4
++  zh: c837e72a228d76b9
+ /deepseek-harness-architecture/events:
+   en: e89802f066e4955d
+   zh: ea2fb4bef94e086d
+diff --git a/docs/architecture.md b/docs/architecture.md
+index 03d88148..8a2d46ea 100644
+--- a/docs/architecture.md
++++ b/docs/architecture.md
+@@ -64,6 +64,8 @@ Electron starts the private Desktop Host in Electron Node mode. The Host invokes
+ | [`core/scope`](subsystems/scope.md) | The per-agent scoped-registration primitive | library, no key |
+ | [`llm/llm`](subsystems/llm-streaming.md) | Message and stream vocabulary plus the adapter seam | `ctx.llm` |
+ 
++The Agent registry delegates idle retirement to its lifecycle owner. Admission stops before activity checks; owner teardown and returned Session disposal promises finish before storage maintenance proceeds. Retirement holds the ID until Host restart and does not coordinate other processes.
++
+ ## Events
+ 
+ Events are the extension points, and picking the right domain is the first decision in most changes.
+diff --git a/docs/architecture.zh.md b/docs/architecture.zh.md
+index 870fa1c9..e3cf38f9 100644
+--- a/docs/architecture.zh.md
++++ b/docs/architecture.zh.md
+@@ -66,6 +66,8 @@ Electron 使用 Electron Node 模式启动私有 Desktop Host。Host 调用共
+ 
+ <a id="events"></a>
+ 
++Agent 注册表将空闲会话关闭委托给生命周期 owner。活动检查前先停止准入；存储维护须等待 owner 清理及 Session 处置返回的 Promise 完成。ID 保留至 Host 重启，此机制不协调其他进程。
++
+ ## 事件
+ 
+ 事件就是扩展点，而选对事件域是大多数改动的第一个决定。
+diff --git a/packages/api/session-controller/README.i18n.yaml b/packages/api/session-controller/README.i18n.yaml
+index 46f67080..3e65bd6a 100644
+--- a/packages/api/session-controller/README.i18n.yaml
++++ b/packages/api/session-controller/README.i18n.yaml
+@@ -9,8 +9,8 @@
+   en: c7a4c58ea6d3437b
+   zh: 45c2b472a074bb1b
+ /session-controller/summary:
+-  en: 4914824c347fdab5
+-  zh: 684a7b7fa970c39f
++  en: dce1583ac2848cb0
++  zh: 2d5b04683a8946cb
+ /session-controller/table-of-contents:
+   en: 1fdf707322fb6996
+   zh: 0204f7e9d4aa3cce
+diff --git a/packages/api/session-controller/README.md b/packages/api/session-controller/README.md
+index 02dff176..876abd59 100644
+--- a/packages/api/session-controller/README.md
++++ b/packages/api/session-controller/README.md
+@@ -12,6 +12,8 @@ Desktop analytics follows the [product collection policy](../../client/product-a
+ 
+ `@deepseek-ai/dsh-api-session-controller` owns the Host `ctx.sessionController` service and the generated Client `session`, `skills`, and `fileReferences` Remote namespaces. It serves Session lifecycle and history, the Host-generation model catalog, human background-job kill, workspace-path opening, user-invocable skill discovery, and Agent-scoped file references. Use it through API Gateway when a Client needs operations addressed by a Session.
+ 
++During explicit Session retirement, disposal does not emit `api-session/removed`. The maintenance caller emits removal only after its storage and accounting cleanup succeeds; retirement alone does not mean that persisted history was deleted.
++
+ ## Table of Contents
+ 
+ - [Use this package](#use-this-package)
+diff --git a/packages/api/session-controller/README.zh.md b/packages/api/session-controller/README.zh.md
+index b01a99cc..562815af 100644
+--- a/packages/api/session-controller/README.zh.md
++++ b/packages/api/session-controller/README.zh.md
+@@ -12,6 +12,8 @@ kind: "package-reference"
+ 
+ `@deepseek-ai/dsh-api-session-controller` 拥有 Host 的 `ctx.sessionController` 服务，以及生成的 Client `session`、`skills` 和 `fileReferences` Remote namespace。它提供 Session 生命周期与历史、Host generation 模型目录、人工后台任务终止、工作区路径打开、用户可调用 skill（技能）发现和 Agent（智能体）范围的文件引用。当 Client 需要按 Session 寻址的操作时，请通过 API Gateway 使用它。
+ 
++显式 Session retirement 期间，处置不会发出 `api-session/removed`。维护调用方仅在存储与关联清理成功后发送移除事件；retirement 本身不代表持久化历史已删除。
++
+ ## 目录
+ 
+ - [使用本包](#use-this-package)
+diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
+index 2362bce2..2d52d79b 100644
+--- a/packages/api/session-controller/src/index.ts
++++ b/packages/api/session-controller/src/index.ts
+@@ -192,6 +192,7 @@ export class SessionController extends TypertRemoteService {
+       ctx.emit('api-session/added', this.listState.summaryFor(session))
+     })
+     ctx.on('session/disposed', (session) => {
++      if (ctx.sessions.isRetiring(session.id)) return
+       ctx.emit('api-session/removed', session.id)
+     })
+     const publishAgentAvailability = ({ agent }: { agent: Agent }): undefined => {
+diff --git a/packages/core/agent-loop/README.i18n.yaml b/packages/core/agent-loop/README.i18n.yaml
+index 0bbdb05d..dfec08bd 100644
+--- a/packages/core/agent-loop/README.i18n.yaml
++++ b/packages/core/agent-loop/README.i18n.yaml
+@@ -9,8 +9,8 @@
+   en: b711ded29c7b9a17
+   zh: cbccba927743f35f
+ /deepseek-ai-dsh-agent-loop/summary:
+-  en: 9256331cd3baf930
+-  zh: 02b4c10cf3286eb3
++  en: 924c201d51c92818
++  zh: b778c5554bb92c08
+ /deepseek-ai-dsh-agent-loop/table-of-contents:
+   en: d152484eb41ac6b4
+   zh: 09388d293f9be9cb
+diff --git a/packages/core/agent-loop/README.md b/packages/core/agent-loop/README.md
+index 62dcd35a..add74c1a 100644
+--- a/packages/core/agent-loop/README.md
++++ b/packages/core/agent-loop/README.md
+@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
+ 
+ `dsh-agent-loop` creates fresh agents or resumes persisted sessions, then drives each turn through model requests, streamed responses, tool execution, and durable session history. Mount it for standard agent compositions; declarative entries start agents at boot, while the public `ctx.agents` API supports programmatic creation and resume. `maxParallelToolCalls` limits concurrent parallel-safe calls, and exclusive calls retain ordering. Cancellation preserves streamed text already delivered to the user. Choose a custom `Agent` implementation only when the standard "call model, run tools, repeat" lifecycle is insufficient.
+ 
++The loop supplies the owner capability for `ctx.agents.retireIfIdle(id)`. It atomically reserves true idle state with an empty inbox and blocks send, inbox insertion, maintenance and wake before teardown. A busy refusal never cancels work. The normal owner teardown closes the scope and writer; a failed close prevents deletion authorization.
++
+ ## Table of Contents
+ 
+ - [Use this package](#use-this-package)
+diff --git a/packages/core/agent-loop/README.zh.md b/packages/core/agent-loop/README.zh.md
+index ee355a32..c462e65a 100644
+--- a/packages/core/agent-loop/README.zh.md
++++ b/packages/core/agent-loop/README.zh.md
+@@ -11,6 +11,8 @@ kind: "package-reference"
+ 
+ `dsh-agent-loop` 创建全新 agent 或恢复持久化会话，随后通过模型请求、流式响应、工具执行和持久会话历史驱动每个轮次。标准 agent 组合应挂载本包；声明式条目会在启动时启动 agent，公开的 `ctx.agents` API 则支持以编程方式创建和恢复 agent。`maxParallelToolCalls` 限制同时运行的并行安全调用数量，独占调用保留顺序。取消会保留已经流式交付给用户的文本。只有标准的「调用模型、运行工具、重复」生命周期无法满足需求时，才应选择自定义 `Agent` 实现。
+ 
++循环为 `ctx.agents.retireIfIdle(id)` 提供 owner 能力：仅在真实空闲且收件箱为空时同步保留，关闭前阻止 send、收件箱插入、维护与唤醒。忙碌时拒绝且不取消任务。关闭复用原 owner 的作用域和 writer 清理；关闭失败不会授权删除。
++
+ ## 目录
+ 
+ - [使用本包](#use-this-package)
+diff --git a/packages/core/agent-loop/src/agent.ts b/packages/core/agent-loop/src/agent.ts
+index adf2e33d..55c86cbe 100644
+--- a/packages/core/agent-loop/src/agent.ts
++++ b/packages/core/agent-loop/src/agent.ts
+@@ -28,7 +28,7 @@ import { assertNever, deepFreeze } from '@deepseek-ai/dsh-util-values'
+ import type { Scope } from '@deepseek-ai/dsh-scope'
+ import { createScope } from '@deepseek-ai/dsh-scope'
+ import type { EpochHeader, RequestContext, Session, SessionId, SessionSeq, TurnEndReason, UserMessage } from '@deepseek-ai/dsh-session'
+-import { canonicalHeader, headerEquals, ToolCallRecovery } from '@deepseek-ai/dsh-session'
++import { canonicalHeader, headerEquals, SessionRetiringError, ToolCallRecovery } from '@deepseek-ai/dsh-session'
+ import { joinContextSections, renderContextSections, renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+ import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+ import type {} from '@deepseek-ai/dsh-session-projection'
+@@ -99,6 +99,23 @@ export class ReactLoopAgent implements Agent {
+   readonly inbox: ReactLoopInbox
+   private phase: Phase
+   private activityDone: Promise<void> = Promise.resolve()
++  private admission: 'open' | 'reserved' | 'closed' = 'open'
++
++  /** Freeze true idle state synchronously; maintenance and pending input refuse without cancellation. */
++  claimRetirement(): (() => void) | undefined {
++    if (this.admission !== 'open' || this.phase.kind !== 'idle' || this.inbox.hasPending) return undefined
++    this.admission = 'reserved'
++    return () => { if (this.admission === 'reserved') this.admission = 'open' }
++  }
++
++  /** Stop direct input and maintenance before owner teardown begins. */
++  stopAdmission(): void {
++    this.admission = 'closed'
++  }
++
++  private assertAccepting(): void {
++    if (this.admission !== 'open') throw new SessionRetiringError(this.id)
++  }
+ 
+   /** The agent-scoped registration boundary; the lifecycle owner unwinds it after the driver exits. */
+   readonly scope: Scope
+@@ -129,7 +146,7 @@ export class ReactLoopAgent implements Agent {
+     this.dispatch = agentEvents(loopCtx, this)
+     this.scope = createScope(loopCtx, this)
+     this.ctx = this.scope.ctx
+-    this.inbox = new ReactLoopInbox(this.ctx.sessionProjections, session, this.dispatch)
++    this.inbox = new ReactLoopInbox(this.ctx.sessionProjections, session, this.dispatch, () => { this.assertAccepting() })
+     /* v8 ignore next -- the loop registers its own turnBoundary unit, so the key is always present */
+     const lastTurn = this.loopCtx.sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
+     this.phase = { kind: 'idle', lastTurn }
+@@ -152,6 +169,7 @@ export class ReactLoopAgent implements Agent {
+   }
+ 
+   send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
++    this.assertAccepting()
+     // Waking input cannot join an aborted activity, so it starts the next turn.
+     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
+     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
+@@ -181,6 +199,7 @@ export class ReactLoopAgent implements Agent {
+   }
+ 
+   runMaintenance<T>(job: (signal: AbortSignal) => Promise<T>): Promise<T> {
++    this.assertAccepting()
+     if (this.phase.kind !== 'idle') throw new Error(`agent "${this.id}" already has active work`)
+     const done = Promise.withResolvers<void>()
+     const maintenance: Phase = {
+@@ -212,6 +231,7 @@ export class ReactLoopAgent implements Agent {
+    *   the inbox insertion so a reentrant cancel cannot reclassify it.
+    */
+   private wakeDriver(wakeAfterAbort = false): void {
++    if (this.admission !== 'open') return
+     if (this.phase.kind !== 'idle') {
+       // Maintenance and aborted drivers cannot deliver the wake: latch it for
+       // replay at convergence. Live drivers claim queued work themselves;
+diff --git a/packages/core/agent-loop/src/inbox.ts b/packages/core/agent-loop/src/inbox.ts
+index ef00887a..9f53b822 100644
+--- a/packages/core/agent-loop/src/inbox.ts
++++ b/packages/core/agent-loop/src/inbox.ts
+@@ -70,12 +70,14 @@ export const inboxProjectionDefinition = {
+  * @param projections - registry with the standard Inbox projection registered by AgentLoop.
+  * @param session - session whose durable events store pending input.
+  * @param dispatch - agent-scoped notifications for Inbox lifecycle events.
++ * @param assertAccepting - owner check before inserting input; removals remain available during teardown.
+  */
+ export class ReactLoopInbox implements InboxContract {
+   constructor(
+     private readonly projections: SessionProjectionRegistry,
+     private readonly session: Session,
+     private readonly dispatch: AgentEventDispatch,
++    private readonly assertAccepting: () => void = () => {},
+   ) {}
+ 
+   /** Prompts awaiting individual turns. */
+@@ -202,6 +204,7 @@ export class ReactLoopInbox implements InboxContract {
+     inserted: UserMessage[],
+     discardRemoved: boolean,
+   ): UserMessage[] {
++    if (inserted.length > 0) this.assertAccepting()
+     const state = this.current()
+     const inbox = state[target]
+     const truncatedStart = Math.trunc(start)
+diff --git a/packages/core/agent-loop/src/index.ts b/packages/core/agent-loop/src/index.ts
+index ca4532af..fc4b06a8 100644
+--- a/packages/core/agent-loop/src/index.ts
++++ b/packages/core/agent-loop/src/index.ts
+@@ -542,6 +542,7 @@ export class AgentLoop extends Service implements AgentFactory {
+     // stop the machine, unwind the scope, drain and close the session's write
+     // path, leave the registries, release bookkeeping.
+     const teardown = (): Promise<void> => (disposing ??= (async () => {
++      machine?.stopAdmission()
+       abort.abort(new Error(this.ownership.isActive()
+         ? `agent "${id}" lifecycle disposed`
+         : 'agent loop is not active'))
+@@ -654,7 +655,10 @@ export class AgentLoop extends Service implements AgentFactory {
+             detachSession = agent.ctx.sessions.enter(session)
+             // The mounted backend routes announced live events into the active
+             // write handle by session id; the loop only owns the handle itself.
+-            detachAgent = loopCtx.agents.enter(agent, parentAgent)
++            detachAgent = loopCtx.agents.enter(agent, parentAgent, {
++              claimIfIdle: () => agent.claimRetirement(),
++              dispose,
++            })
+             agent.ctx.sessions.announce(session)
+             assertLive()
+             await loopCtx.agents.announce(agent, source, abort.signal)
+@@ -748,42 +752,44 @@ export class AgentLoop extends Service implements AgentFactory {
+    * @returns the published handle.
+    */
+   async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
+-    const preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(options.sessionId, {
+-      ...options.seed === undefined ? {} : { seed: options.seed },
+-      ...options.meta === undefined ? {} : { meta: options.meta },
+-      ...options.inheritedEventCount === undefined ? {} : { inheritedEventCount: options.inheritedEventCount },
+-    }))
+-    const published = (async () => {
+-      let stored: StoredSession | undefined
+-      try {
+-        // raceAbortCall normalizes a pre-aborted or mid-create abort and
+-        // closes a handle that finishes creating after abandonment.
+-        stored = options.signal === undefined
+-          ? await this.createStoredSession(preparation.session)
+-          : await raceAbortCall(
+-            () => this.createStoredSession(preparation.session, options.signal),
+-            options.signal,
+-            options.sessionId,
+-            (abandoned) => { void abandoned?.handle.close().catch(() => {}) },
+-          )
+-      } catch (error: unknown) {
+-        preparation[Symbol.dispose]()
+-        throw error
+-      }
+-      return this.setupAndPublish(
+-        ownerCtx,
+-        options.sessionId,
+-        preparation,
+-        options.agentOptions ?? {},
+-        options.setup,
+-        options.signal,
+-        'startup',
+-        stored,
+-        options.parentAgent,
+-      )
+-    })()
+-    this.ownership.trackWrapper(published)
+-    return published
++    return this.runtime.ctx.agents.trackSetup(options.sessionId, async () => {
++      const preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(options.sessionId, {
++        ...options.seed === undefined ? {} : { seed: options.seed },
++        ...options.meta === undefined ? {} : { meta: options.meta },
++        ...options.inheritedEventCount === undefined ? {} : { inheritedEventCount: options.inheritedEventCount },
++      }))
++      const published = (async () => {
++        let stored: StoredSession | undefined
++        try {
++          // raceAbortCall normalizes a pre-aborted or mid-create abort and
++          // closes a handle that finishes creating after abandonment.
++          stored = options.signal === undefined
++            ? await this.createStoredSession(preparation.session)
++            : await raceAbortCall(
++              () => this.createStoredSession(preparation.session, options.signal),
++              options.signal,
++              options.sessionId,
++              (abandoned) => { void abandoned?.handle.close().catch(() => {}) },
++            )
++        } catch (error: unknown) {
++          preparation[Symbol.dispose]()
++          throw error
++        }
++        return this.setupAndPublish(
++          ownerCtx,
++          options.sessionId,
++          preparation,
++          options.agentOptions ?? {},
++          options.setup,
++          options.signal,
++          'startup',
++          stored,
++          options.parentAgent,
++        )
++      })()
++      this.ownership.trackWrapper(published)
++      return published
++    })
+   }
+ 
+   /** Prepare one Agent around an acquired Session, run setup, and publish it. */
+@@ -855,74 +861,76 @@ export class AgentLoop extends Service implements AgentFactory {
+     options: ResumeAgentOptions,
+   ): Promise<AgentHandle> {
+     const id = options.resumeSessionId
+-    const published = (async () => {
+-      // The open and read may outlive their owner: race them against caller
+-      // cancellation, owner-fiber unload, and factory teardown so a
+-      // never-settling backend cannot pin the identity.
+-      const ownerAbort = new AbortController()
+-      const unfollowOwner = ownerCtx.effect(() => () => {
+-        ownerAbort.abort(new Error(`agent "${id}" setup aborted: owner disposed during setup`))
+-      }, `agentLoop.resume-load(${id})`)
+-      const fused = AbortSignal.any([
+-        ...options.signal === undefined ? [] : [options.signal],
+-        ownerAbort.signal,
+-        this.ownership.signal,
+-      ])
+-      let handle: SessionHandle | undefined
+-      let stored: StoredSession | undefined
+-      let preparation: SessionPreparation | undefined
+-      try {
++    return this.runtime.ctx.agents.trackSetup(id, () => {
++      const published = (async () => {
++        // The open and read may outlive their owner: race them against caller
++        // cancellation, owner-fiber unload, and factory teardown so a
++        // never-settling backend cannot pin the identity.
++        const ownerAbort = new AbortController()
++        const unfollowOwner = ownerCtx.effect(() => () => {
++          ownerAbort.abort(new Error(`agent "${id}" setup aborted: owner disposed during setup`))
++        }, `agentLoop.resume-load(${id})`)
++        const fused = AbortSignal.any([
++          ...options.signal === undefined ? [] : [options.signal],
++          ownerAbort.signal,
++          this.ownership.signal,
++        ])
++        let handle: SessionHandle | undefined
++        let stored: StoredSession | undefined
++        let preparation: SessionPreparation | undefined
+         try {
+-          // Taking write ownership FIRST excludes a concurrent resume of the
+-          // same id (in this process, a live agent's handle holds the claim).
+-          handle = await raceAbortCall(
+-            () => persistence.open(id, 'write', { signal: fused }),
+-            fused,
++          try {
++            // Taking write ownership FIRST excludes a concurrent resume of the
++            // same id (in this process, a live agent's handle holds the claim).
++            handle = await raceAbortCall(
++              () => persistence.open(id, 'write', { signal: fused }),
++              fused,
++              id,
++              (abandoned) => { void abandoned.close() },
++            )
++            // Semantic crash repair is the agent layer's job: persistence hands
++            // back the physically valid log; an interrupted final turn receives
++            // synthetic closers (missing tool errors, step/end, turn/end) that
++            // are appended through the same handle as an ordinary batch.
++            const coldRead = await handle.read(0, undefined, { signal: fused })
++            fused.throwIfAborted()
++            const persisted = coldRead.events
++            const closers = interruptedTurnClosers(persisted)
++            if (closers.length > 0) await handle.append(closers)
++            preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, {
++              seed: [...persisted, ...closers],
++              meta: structuredClone(handle.header),
++              inheritedEventCount: handle.inheritedEventCount,
++              eventState: coldRead.eventState,
++            }))
++            stored = { handle, storedCount: persisted.length + closers.length }
++            await this.appendUnstoredSuffix(stored, preparation.session)
++          } finally {
++            await unfollowOwner()
++          }
++          ownerCtx.fiber.assertActive()
++          if (!this.ownership.isActive()) throw new Error('agent loop is not active')
++          const owned = stored
++          handle = undefined // ownership passes to setupAndPublish/prepare
++          return await this.setupAndPublish(
++            ownerCtx,
+             id,
+-            (abandoned) => { void abandoned.close() },
++            preparation,
++            options.agentOptions ?? {},
++            options.setup,
++            options.signal,
++            'resume',
++            owned,
++            options.parentAgent,
+           )
+-          // Semantic crash repair is the agent layer's job: persistence hands
+-          // back the physically valid log; an interrupted final turn receives
+-          // synthetic closers (missing tool errors, step/end, turn/end) that
+-          // are appended through the same handle as an ordinary batch.
+-          const coldRead = await handle.read(0, undefined, { signal: fused })
+-          fused.throwIfAborted()
+-          const persisted = coldRead.events
+-          const closers = interruptedTurnClosers(persisted)
+-          if (closers.length > 0) await handle.append(closers)
+-          preparation = SessionPreparation.create(this.runtime.ctx.sessions.prepare(id, {
+-            seed: [...persisted, ...closers],
+-            meta: structuredClone(handle.header),
+-            inheritedEventCount: handle.inheritedEventCount,
+-            eventState: coldRead.eventState,
+-          }))
+-          stored = { handle, storedCount: persisted.length + closers.length }
+-          await this.appendUnstoredSuffix(stored, preparation.session)
+         } finally {
+-          await unfollowOwner()
++          preparation?.[Symbol.dispose]()
++          await handle?.close().catch(() => {})
+         }
+-        ownerCtx.fiber.assertActive()
+-        if (!this.ownership.isActive()) throw new Error('agent loop is not active')
+-        const owned = stored
+-        handle = undefined // ownership passes to setupAndPublish/prepare
+-        return await this.setupAndPublish(
+-          ownerCtx,
+-          id,
+-          preparation,
+-          options.agentOptions ?? {},
+-          options.setup,
+-          options.signal,
+-          'resume',
+-          owned,
+-          options.parentAgent,
+-        )
+-      } finally {
+-        preparation?.[Symbol.dispose]()
+-        await handle?.close().catch(() => {})
+-      }
+-    })()
+-    this.ownership.trackWrapper(published)
+-    return published
++      })()
++      this.ownership.trackWrapper(published)
++      return published
++    })
+   }
+ }
+ 
+diff --git a/packages/core/agent/README.i18n.yaml b/packages/core/agent/README.i18n.yaml
+index befdc096..0fee8cd4 100644
+--- a/packages/core/agent/README.i18n.yaml
++++ b/packages/core/agent/README.i18n.yaml
+@@ -9,8 +9,8 @@
+   en: e6513350f94898d8
+   zh: feb04fc389801a62
+ /deepseek-ai-dsh-agent/summary:
+-  en: 717e7d19a6f72e56
+-  zh: 152c18689fe4f377
++  en: b3ab4d7bad5d4aff
++  zh: bc62c7ef31894fbd
+ /deepseek-ai-dsh-agent/table-of-contents:
+   en: d152484eb41ac6b4
+   zh: 09388d293f9be9cb
+diff --git a/packages/core/agent/README.md b/packages/core/agent/README.md
+index 9da1f06f..762ba58b 100644
+--- a/packages/core/agent/README.md
++++ b/packages/core/agent/README.md
+@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
+ 
+ Use `dsh-agent` to create or resume live agents, send follow-up or steering input, inject model-facing context, cancel work, and wait for idle completion. Plugins, UI, hooks, and orchestrators can also observe or intercept agent activity and apply capabilities to one agent without affecting others. Choose it when code needs to control or extend live agents through the public `Agent` API. Pair it with an agent driver such as `dsh-agent-loop`; this package does not create model requests by itself. Initiator attribution is process-local and must be carried explicitly across workers, processes, durable queues, and restarts.
+ 
++`ctx.agents.retireIfIdle(id)` blocks new input and restoration, refuses unpublished creation/resume, active work, pending input and maintenance, then delegates teardown to the registered owner and awaits Session disposal. Ordinary loop owners support it; owners without this capability return `AGENT_RETIRE_UNSUPPORTED`. Retirement retains the ID until Host restart, including after a closing failure. It does not delete storage or coordinate other Hosts.
++
+ ## Table of Contents
+ 
+ - [Use this package](#use-this-package)
+diff --git a/packages/core/agent/README.zh.md b/packages/core/agent/README.zh.md
+index 0166f96a..b38a065a 100644
+--- a/packages/core/agent/README.zh.md
++++ b/packages/core/agent/README.zh.md
+@@ -11,6 +11,8 @@ kind: "package-reference"
+ 
+ 使用 `dsh-agent` 创建或恢复实时 agent（智能体）、发送后续或 steering（中途引导）输入、注入面向模型的上下文、取消工作，并等待 agent 进入空闲状态。插件、UI、钩子与编排器还可以观察或拦截 agent 活动，并仅为一个 agent 应用能力而不影响其他 agent。当代码需要通过公开 `Agent` API 控制或扩展实时 agent 时，请选择本包。请将它与 `dsh-agent-loop` 等 agent 驱动器配合使用；本包本身不会创建模型请求。发起方归因仅存在于进程内，跨 worker、进程、持久队列与重启时必须显式传递。
+ 
++`ctx.agents.retireIfIdle(id)` 阻止新输入与恢复，拒绝尚未发布的创建/恢复、正在执行的任务、待处理输入和维护操作，再委托登记的 owner 关闭并等待 Session 处置完成。标准循环 owner 支持此能力；未提供能力的 owner 返回 `AGENT_RETIRE_UNSUPPORTED`。ID 会保留至 Host 重启，关闭失败时同样保留。此接口不删除存储，也不协调其他 Host。
++
+ ## 目录
+ 
+ - [使用本包](#use-this-package)
+diff --git a/packages/core/agent/src/index.ts b/packages/core/agent/src/index.ts
+index dd8d09e6..030e5491 100644
+--- a/packages/core/agent/src/index.ts
++++ b/packages/core/agent/src/index.ts
+@@ -11,7 +11,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
+ import { isPromise } from 'node:util/types'
+ import { scopeTarget } from '@deepseek-ai/dsh-scope'
+ import type { Scoped } from '@deepseek-ai/dsh-scope'
+-import type { SessionEvent, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
++import type { SessionEvent, SessionId, SessionLogOffset, SessionRetirement } from '@deepseek-ai/dsh-session'
+ import { installTurnArchiveAdmission } from './archive-admission.ts'
+ import type { Agent } from './types.ts'
+ import type { AgentOptions, SessionStartSource } from './runtime-types.ts'
+@@ -207,6 +207,22 @@ const NO_FACTORY_MESSAGE = 'no agent factory registered (load an agent-loop plug
+ const NO_INITIATOR_MESSAGE = 'no initiating agent is active'
+ const DISPOSED_INITIATOR_MESSAGE = 'agent initiator scope is disposed'
+ 
++/** Owner-delegated retirement for one exact Agent; absent for unsupported owners. */
++export interface AgentRetirement {
++  /** Synchronously freeze only true idle, empty-inbox state; return its pre-close release or undefined when busy. */
++  claimIfIdle(): (() => void) | undefined
++  /** Await the original owner's complete teardown. */
++  dispose(): Promise<void>
++}
++
++/** An expected idle-retirement refusal; no active work is cancelled. */
++export class AgentRetirementError extends Error {
++  constructor(public readonly code: 'AGENT_ACTIVE' | 'AGENT_RETIRE_UNSUPPORTED', id: SessionId) {
++    super(`agent "${id}": ${code}`)
++    this.name = 'AgentRetirementError'
++  }
++}
++
+ /** All mutable lifecycle state for one exact registry entry. */
+ interface AgentEntry {
+   readonly id: SessionId
+@@ -214,6 +230,7 @@ interface AgentEntry {
+   /** Runtime creator-agent ownership; independent of durable session lineage. */
+   readonly owner: Agent | undefined
+   readonly carrier: Scoped<Agent>
++  readonly retirement: AgentRetirement | undefined
+   announced: boolean
+   announcing: boolean
+   detachRequested: boolean
+@@ -245,6 +262,63 @@ interface FactorySlot {
+ export class AgentRegistry extends Service {
+   private store = new Map<SessionId, AgentEntry>()
+   private factory: FactorySlot | undefined
++  private readonly setups = new Map<SessionId, { pending: number }>()
++  private readonly retirements = new Map<SessionId, Promise<void>>()
++
++  /**
++   * Retire a Session without cancelling work. Inputs, restoration and publication are blocked
++   * before checking other activity. The registered owner closes its scope and writer, then all
++   * Session disposal observers settle. Closing failure retains the block until Host restart.
++   * @param id - Session identity to retire, including a cold or already absent identity.
++   * @returns completion after the exact lifecycle leaves both stores; repeated calls join it.
++   * @throws AgentRetirementError for busy or unsupported owners; storage/teardown failures propagate.
++   */
++  retireIfIdle(id: SessionId): Promise<void> {
++    const existing = this.retirements.get(id)
++    if (existing !== undefined) return existing
++    const sessions = this.ctx.get('sessions')
++    if (sessions === undefined) throw new AgentRetirementError('AGENT_RETIRE_UNSUPPORTED', id)
++    if (this.setups.has(id)) throw new AgentRetirementError('AGENT_ACTIVE', id)
++    const entry = this.store.get(id)
++    let releaseInput: (() => void) | undefined
++    if (entry !== undefined) {
++      if (entry.retirement === undefined) throw new AgentRetirementError('AGENT_RETIRE_UNSUPPORTED', id)
++      if (entry.announcing) throw new AgentRetirementError('AGENT_ACTIVE', id)
++      releaseInput = entry.retirement.claimIfIdle()
++      if (releaseInput === undefined) throw new AgentRetirementError('AGENT_ACTIVE', id)
++    }
++    let reservation: SessionRetirement
++    try { reservation = sessions.beginRetirement(id) }
++    catch (error: unknown) { releaseInput?.(); throw error }
++    const completion = Promise.withResolvers<void>()
++    this.retirements.set(id, completion.promise)
++    let closing = false
++    const retire = async (): Promise<void> => {
++      try {
++        const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId: id }, () => Promise.resolve([]))
++        if (!Array.isArray(activity)) throw new AgentRetirementError('AGENT_RETIRE_UNSUPPORTED', id)
++        if (activity.length > 0) throw new AgentRetirementError('AGENT_ACTIVE', id)
++        closing = true
++        await reservation.close(async () => {
++          const session = sessions.get(id)
++          if (session !== undefined && !await sessions.flush(session)) {
++            throw new AgentRetirementError('AGENT_RETIRE_UNSUPPORTED', id)
++          }
++          await entry?.retirement?.dispose()
++          if (this.store.has(id)) throw new AgentRetirementError('AGENT_RETIRE_UNSUPPORTED', id)
++        })
++      } catch (error: unknown) {
++        if (!closing) {
++          reservation.release()
++          releaseInput?.()
++          this.retirements.delete(id)
++        }
++        throw error
++      }
++    }
++    void retire().then(completion.resolve, completion.reject)
++    return completion.promise
++  }
+   private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
+   private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
+   private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
+@@ -381,6 +455,26 @@ export class AgentRegistry extends Service {
+     return this.factory
+   }
+ 
++  /**
++   * Track unpublished storage and setup work so retirement refuses rather than
++   * treating the identity as absent. Factories called directly (including configured
++   * startup) must use this around all storage work; nested registry calls are safe.
++   * @param id - identity being created or restored.
++   * @param operation - complete setup, publication and rollback operation.
++   * @returns its handle, after setup tracking has been released.
++   */
++  async trackSetup(id: SessionId, operation: () => Promise<AgentHandle>): Promise<AgentHandle> {
++    this.ctx.get('sessions')?.assertAvailable(id)
++    const setup = this.setups.get(id) ?? { pending: 0 }
++    setup.pending++
++    this.setups.set(id, setup)
++    try { return await operation() }
++    finally {
++      setup.pending--
++      if (setup.pending === 0) this.setups.delete(id)
++    }
++  }
++
+   /**
+    * Create and publish a new agent through the registered factory.
+    * Distinct from {@link register} (which records an already-constructed
+@@ -391,6 +485,7 @@ export class AgentRegistry extends Service {
+    * @returns the handle after setup, rollback-covered publication, and loop start complete.
+    */
+   async create(options: CreateAgentOptions): Promise<AgentHandle> {
++    this.ctx.get('sessions')?.assertAvailable(options.sessionId)
+     const ownerCtx = this.ctx
+     // Re-trace a Service-backed factory through the accessing context
+     // explicitly. This preserves AgentLoop's dependency origin while binding
+@@ -399,7 +494,7 @@ export class AgentRegistry extends Service {
+     const { target } = this.requireFactory()
+     const receiver = getTraceable(ownerCtx, target)
+     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+-    return Reflect.apply(target.createAgent, receiver, [ownerCtx, options])
++    return this.trackSetup(options.sessionId, () => Reflect.apply(target.createAgent, receiver, [ownerCtx, options]))
+   }
+ 
+   /**
+@@ -410,11 +505,12 @@ export class AgentRegistry extends Service {
+    * @returns the handle after setup, rollback-covered publication, and loop start complete.
+    */
+   async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
++    this.ctx.get('sessions')?.assertAvailable(options.resumeSessionId)
+     const ownerCtx = this.ctx
+     const { target } = this.requireFactory()
+     const receiver = getTraceable(ownerCtx, target)
+     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
+-    return Reflect.apply(target.resume, receiver, [ownerCtx, options])
++    return this.trackSetup(options.resumeSessionId, () => Reflect.apply(target.resume, receiver, [ownerCtx, options]))
+   }
+ 
+   /**
+@@ -453,13 +549,15 @@ export class AgentRegistry extends Service {
+    * @param owner - explicitly supplied live runtime owner, or
+    *   undefined for a top-level runtime root. This is runtime ownership, not
+    *   the resumed session's durable parent lineage.
++   * @param retirement - optional owner capability for draining an idle lifecycle.
+    * @returns an idempotent closure that removes this exact entry and emits
+    *   `agent/disposed` with listener failures contained. When called from a
+    *   `agent/created` listener, removal and disposal wait until the serial
+    *   creation dispatch settles.
+    */
+-  enter(agent: Agent, owner: Agent | undefined): () => void {
++  enter(agent: Agent, owner: Agent | undefined, retirement?: AgentRetirement): () => void {
+     const id = agent.id
++    this.ctx.get('sessions')?.assertAvailable(id)
+     if (id !== agent.session.id) {
+       throw new Error(`agent id "${id}" does not match session id "${agent.session.id}"`)
+     }
+@@ -472,6 +570,7 @@ export class AgentRegistry extends Service {
+       agent,
+       owner,
+       carrier,
++      retirement,
+       announced: false,
+       announcing: false,
+       detachRequested: false,
+diff --git a/packages/core/session/README.i18n.yaml b/packages/core/session/README.i18n.yaml
+index c4e74b13..085f3108 100644
+--- a/packages/core/session/README.i18n.yaml
++++ b/packages/core/session/README.i18n.yaml
+@@ -9,8 +9,8 @@
+   en: c019c0e8c7f9cba0
+   zh: 151e150825fda310
+ /deepseek-ai-dsh-session/summary:
+-  en: 311239677afd230a
+-  zh: f2c575945baaa2a2
++  en: f8db83d65c6b2c1a
++  zh: 6c8b420535c1d92b
+ /deepseek-ai-dsh-session/table-of-contents:
+   en: d152484eb41ac6b4
+   zh: 09388d293f9be9cb
+diff --git a/packages/core/session/README.md b/packages/core/session/README.md
+index 178dc708..b46e8056 100644
+--- a/packages/core/session/README.md
++++ b/packages/core/session/README.md
+@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
+ 
+ `dsh-session` records every model-visible fact in an append-only session log and derives model history from that record. Consumers can inspect, replay, fork, and flush sessions while preserving historical events; compaction hides superseded entries from the active conversation without deleting them. Sessions remain in memory unless a persistence backend is added, and durability checkpoints wait for configured backends. Choose this package wherever an agent needs a reconstructable session record; it does not call models.
+ 
++`beginRetirement(id)` reserves one ID before asynchronous closure. The Agent registry must first claim the idle owner. Only the supplied finalizer may append while closing; create and enter remain blocked. Closing awaits returned `session/disposed` promises. Releasing is allowed only before closing; once closing begins, the ID stays reserved until Host restart. Fire-and-forget listener work is outside this completion promise.
++
+ ## Table of Contents
+ 
+ - [Use this package](#use-this-package)
+diff --git a/packages/core/session/README.zh.md b/packages/core/session/README.zh.md
+index 4f4908ef..4550cdf1 100644
+--- a/packages/core/session/README.zh.md
++++ b/packages/core/session/README.zh.md
+@@ -11,6 +11,8 @@ kind: "package-reference"
+ 
+ `dsh-session` 在仅追加的会话日志中记录每个模型可见事实，并从该记录派生模型历史。消费方可以检查、回放、fork 和刷新会话，同时保留历史事件；压缩（compaction）会在活跃对话中隐藏被取代的条目，但不会删除它们。除非添加持久化后端，否则会话仅保留在内存中；持久性检查点会等待配置的后端。agent 需要可重建的会话记录时请选择本包；它本身不调用模型。
+ 
++`beginRetirement(id)` 在异步关闭前保留一个 ID；Agent 注册表须先取得空闲 owner 的关闭许可。关闭时只有传入的 finalizer 可以追加事件，create 和 enter 仍被阻止。关闭会等待 `session/disposed` 监听器返回的 Promise。仅关闭前允许释放保留；开始关闭后，ID 保留至 Host 重启。监听器未返回的后台任务不包含在完成承诺中。
++
+ ## 目录
+ 
+ - [使用本包](#use-this-package)
+diff --git a/packages/core/session/src/index.ts b/packages/core/session/src/index.ts
+index e1ecb920..04713e64 100644
+--- a/packages/core/session/src/index.ts
++++ b/packages/core/session/src/index.ts
+@@ -8,6 +8,7 @@
+ 
+ import { Context, Service } from '@deepseek-ai/cordis'
+ import { isAbsolute } from 'node:path'
++import { AsyncLocalStorage } from 'node:async_hooks'
+ import { brandString } from '@deepseek-ai/dsh-brand'
+ import { assertNever, deepFreeze, snapshotJsonValue } from '@deepseek-ai/dsh-util-values'
+ import { scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
+@@ -55,12 +56,12 @@ declare module '@deepseek-ai/cordis' {
+     /**
+      * Emitted once when an announced session leaves the store, including
+      * publication rollback, but never for an entry whose creation announcement
+-     * did not begin. Listener failures are logged and contained.
++     * did not begin. Normal detach logs listener failures; retirement awaits and propagates them.
+      * Scope-filtered dispatch (`@deepseek-ai/dsh-scope`) reuses the owner scope.
+      * @param session - the session that is no longer live in the store.
+      * @mode emit
+      */
+-    'session/disposed'(this: Scoped<Session>, session: Session): void
++    'session/disposed'(this: Scoped<Session>, session: Session): void | Promise<void>
+     /**
+      * Post-commit, fire-and-forget append feed. The listener snapshot resolves
+      * before the log push, but callbacks run after it; observer failures are
+@@ -425,11 +426,38 @@ interface SessionEntry {
+   announcing: boolean
+   appending: boolean
+   detachRequested: boolean
++  disposed?: Promise<void>
+   detach(): void
+ }
+ 
+ /** Store attachment for the append path; module-private to keep Session store-agnostic publicly. */
+ const attachments = new WeakMap<Session, SessionEntry>()
++let setAppendGuard: (session: Session, guard: (() => void) | undefined) => void
++
++/** A Host-owned retirement blocks new publication while its owner closes resources. */
++export interface SessionRetirement {
++  /**
++   * Close the captured lifecycle, detach it, and await disposed observers; failure retains retirement.
++   * @param owner - exact lifecycle finalizer, allowed to append its closing events.
++   */
++  close(owner: () => Promise<void>): Promise<void>
++  /** Release an unused retirement after an idle check refused; closing retirements cannot be released. */
++  release(): void
++}
++
++interface RetirementRecord {
++  phase: 'preparing' | 'closing' | 'closed'
++}
++
++/** A Session cannot be reopened or mutated while its retirement is held. */
++export class SessionRetiringError extends Error {
++  /** Stable refusal code for work admitted after retirement was reserved. */
++  readonly code = 'SESSION_RETIRING'
++  constructor(id: SessionId) {
++    super(`session "${id}" is retiring`)
++    this.name = 'SessionRetiringError'
++  }
++}
+ 
+ /**
+  * Grammar of a {@link PluginRecordType}: `plugin:` followed by
+@@ -521,6 +549,7 @@ export function pluginRecordOf(event: SessionEvent): PluginRecord | undefined {
+  */
+ export class Session {
+   private log: SessionEvent[] = []
++  private appendGuard: (() => void) | undefined
+   /** Single incremental owner of surface acceptance and projection state. */
+   private readonly surfaceManager: SurfaceManager
+ 
+@@ -827,6 +856,7 @@ export class Session {
+   }
+ 
+   static {
++    setAppendGuard = (session, guard) => { session.appendGuard = guard }
+     commitPluginRecord = (session, type, data) => session.#appendRecord(type, data)
+   }
+ 
+@@ -860,6 +890,7 @@ export class Session {
+    * @returns the attachment, or undefined for a detached Session.
+    */
+   private publicationEntry(): SessionEntry | undefined {
++    this.appendGuard?.()
+     const entry = attachments.get(this)
+     if (entry?.appending) {
+       throw new Error('session append cannot reenter while another append is being published')
+@@ -1049,6 +1080,67 @@ export class SessionForkError extends Error {
+ export class SessionStore extends Service {
+   private store = new Map<SessionId, SessionEntry>()
+   private counter = 0
++  private readonly retiring = new Map<SessionId, RetirementRecord>()
++  private readonly retirementOwner = new AsyncLocalStorage<RetirementRecord>()
++
++  /**
++   * Inspect the retirement reservation.
++   * @param id - Session identity to inspect.
++   * @returns whether this ID is closed to new work until release or Host restart.
++   */
++  isRetiring(id: SessionId): boolean {
++    return this.retiring.has(id)
++  }
++
++  /**
++   * Reject publication or restoration into an ID reserved for retirement.
++   * @param id - target identity.
++   * @throws SessionRetiringError while the ID is reserved.
++   */
++  assertAvailable(id: SessionId): void {
++    if (this.retiring.has(id)) throw new SessionRetiringError(id)
++  }
++
++  /**
++   * Reserve an exact lifecycle synchronously. AgentRegistry must first claim its idle owner.
++   * Only the supplied owner finalizer may append while closing. Successful or failed closing
++   * keeps the ID retired until Host restart; no old callback can reach a replacement lifecycle.
++   * @param id - identity whose publication must stop.
++   * @returns the capability to close or release this reservation before closing.
++   */
++  beginRetirement(id: SessionId): SessionRetirement {
++    this.assertAvailable(id)
++    const entry = this.store.get(id)
++    if (entry?.announcing || entry?.appending) throw new SessionRetiringError(id)
++    const record: RetirementRecord = { phase: 'preparing' }
++    this.retiring.set(id, record)
++    if (entry !== undefined) setAppendGuard(entry.session, () => {
++      if (this.retiring.get(id) === record
++        && (record.phase === 'closed' || this.retirementOwner.getStore() !== record)) {
++        throw new SessionRetiringError(id)
++      }
++    })
++    return {
++      close: async (owner) => {
++        if (this.retiring.get(id) !== record || record.phase !== 'preparing') throw new SessionRetiringError(id)
++        record.phase = 'closing'
++        await this.retirementOwner.run(record, async () => {
++          await owner()
++          if (entry !== undefined) {
++            if (this.store.get(id) === entry) entry.detach()
++            await entry.disposed
++            if (this.store.has(id)) throw new SessionRetiringError(id)
++          }
++        })
++        record.phase = 'closed'
++      },
++      release: () => {
++        if (record.phase !== 'preparing' || this.retiring.get(id) !== record) return
++        this.retiring.delete(id)
++        if (entry !== undefined) setAppendGuard(entry.session, undefined)
++      },
++    }
++  }
+   private readonly projections: SessionMessageProjection[] = []
+ 
+   /** Borrowed definitions for detached replay; contributions live until their registering fibers unload. */
+@@ -1144,10 +1236,11 @@ export class SessionStore extends Service {
+     let sessionId: SessionId
+     if (id === undefined) {
+       do sessionId = brandString<SessionId>(`session-${++this.counter}`)
+-      while (this.store.has(sessionId))
++      while (this.store.has(sessionId) || this.retiring.has(sessionId))
+     } else {
+       sessionId = brandString<SessionId>(id)
+     }
++    this.assertAvailable(sessionId)
+     if (this.store.has(sessionId)) throw new Error(`session "${sessionId}" already exists`)
+     if (options !== undefined) {
+       const { eventState } = options
+@@ -1209,6 +1302,7 @@ export class SessionStore extends Service {
+    */
+   enter(session: Session): () => void {
+     const id = session.id
++    this.assertAvailable(id)
+     const carrier = scopeTarget(session, scopeOf(this.ctx))
+     // This is the authoritative collision boundary after arbitrary unpublished
+     // preparation. Only one exact same-id transaction can publish.
+@@ -1297,9 +1391,25 @@ export class SessionStore extends Service {
+     const callbackArgs: unknown[] = [entry.session]
+     try {
+       const callbacks = collectSessionCallbacks(this.ctx, [entry.carrier, 'session/disposed', entry.session])
+-      invokeContainedSessionObservers(this.ctx, 'session/disposed', entry.id, callbackArgs, callbacks)
++      entry.disposed = Promise.allSettled(callbacks.map(async (callback) => {
++        await callback(...callbackArgs)
++      })).then((results) => {
++        const failures: unknown[] = []
++        for (const result of results) {
++          if (result.status === 'rejected') failures.push(result.reason)
++        }
++        if (failures.length > 0) throw new AggregateError(failures, `session "${entry.id}" disposal failed`)
++      })
++      void entry.disposed.catch((error: unknown) => {
++        this.ctx.logger.warn(`session "${entry.id}": session/disposed listener rejected: ${String(error)}`)
++      })
+     } catch (error: unknown) {
+-      this.ctx.logger.warn(`session "${entry.id}": session/disposed dispatch threw: ${String(error)}`)
++      entry.disposed = Promise.reject(error instanceof Error
++        ? error
++        : new Error(`session "${entry.id}" disposal dispatch failed`, { cause: error }))
++      void entry.disposed.catch((failure: unknown) => {
++        this.ctx.logger.warn(`session "${entry.id}": session/disposed dispatch threw: ${String(failure)}`)
++      })
+     }
+   }
+ 
+diff --git a/packages/session/session-persistence-jsonl/README.i18n.yaml b/packages/session/session-persistence-jsonl/README.i18n.yaml
+index e134bef8..34aaccb8 100644
+--- a/packages/session/session-persistence-jsonl/README.i18n.yaml
++++ b/packages/session/session-persistence-jsonl/README.i18n.yaml
+@@ -9,8 +9,8 @@
+   en: 719697c849e36229
+   zh: 466ab1b89c10020c
+ /deepseek-ai-dsh-session-persistence-jsonl/summary:
+-  en: 4821bd83813408c7
+-  zh: 2e5c721a19f549e7
++  en: 48f55784506f4bb8
++  zh: 44ee54773d505033
+ /deepseek-ai-dsh-session-persistence-jsonl/table-of-contents:
+   en: d152484eb41ac6b4
+   zh: 09388d293f9be9cb
+diff --git a/packages/session/session-persistence-jsonl/README.md b/packages/session/session-persistence-jsonl/README.md
+index 5782c614..f9495112 100644
+--- a/packages/session/session-persistence-jsonl/README.md
++++ b/packages/session/session-persistence-jsonl/README.md
+@@ -11,6 +11,8 @@ English | [中文](README.zh.md)
+ 
+ `dsh-session-persistence-jsonl` stores each session in a current append-only JSONL log and retains immutable historical format generations — checksummed Zstandard frames by default, raw newline-delimited lines when compression is disabled. It serves the current logical `SessionEvent` stream through persistence handles, so format migration, compression, historical decoding, and crash recovery remain storage-internal details. Choose it when consumers need a per-session file on disk; the logs are readable as plain lines when `compression: 'none'` is selected. A root directory is the one required configuration; durability, lazy materialization, [supported historical-format migration](../session-format-catalog/README.md), and torn-tail crash recovery come with the backend.
+ 
++The `session/disposed` observer returns its writer-close promise so Session retirement can await the final drain and propagate failures. Ordinary synchronous detach still returns before asynchronous disposal settles.
++
+ ## Table of Contents
+ 
+ - [Use this package](#use-this-package)
+diff --git a/packages/session/session-persistence-jsonl/README.zh.md b/packages/session/session-persistence-jsonl/README.zh.md
+index dbd602af..4ff4c0eb 100644
+--- a/packages/session/session-persistence-jsonl/README.zh.md
++++ b/packages/session/session-persistence-jsonl/README.zh.md
+@@ -11,6 +11,8 @@ kind: "package-reference"
+ 
+ `dsh-session-persistence-jsonl` 把每个会话存为当前的仅追加 JSONL 日志，并保留不可变的历史格式 generation——默认以带校验和的 Zstandard 帧存储，禁用压缩时以换行分隔的原始文本行存储。它通过持久化句柄提供当前逻辑 `SessionEvent` 流，因此格式迁移、压缩、历史解码与崩溃恢复仍是存储内部细节。当消费方需要按会话的磁盘文件时选择它；选择 `compression: 'none'` 后日志可作为纯文本按行读取。根目录是唯一必填配置；持久性、延迟实体化、[受支持的历史格式迁移](../session-format-catalog/README.zh.md)与撕裂尾部崩溃恢复都随后端提供。
+ 
++`session/disposed` 监听器返回 writer 关闭的 Promise，使 Session retirement 可以等待最终写入并传播失败。普通同步 detach 仍在异步处置结束前返回。
++
+ ## 目录
+ 
+ - [使用本包](#use-this-package)
+diff --git a/packages/session/session-persistence-jsonl/src/storage.ts b/packages/session/session-persistence-jsonl/src/storage.ts
+index 197dcbc2..f81d73f2 100644
+--- a/packages/session/session-persistence-jsonl/src/storage.ts
++++ b/packages/session/session-persistence-jsonl/src/storage.ts
+@@ -562,9 +562,7 @@ export class JsonlBackendTracker {
+       yield ctx.on('session/disposed', (session: Session) => {
+         const writer = writers.get(session.id)
+         if (writer === null || writer === undefined) return
+-        writer.close().catch((error: unknown) => {
+-          ctx.logger.warn(`session-persistence: final drain for session "${session.id}" failed: ${String(error)}`)
+-        })
++        return writer.close()
+       })
+     }, `${this.name} live routing and open handles`)
+   }

@@ -55,7 +55,7 @@
 
 1. 上游需要向会话 owner 提供可委托的、拒绝活动并可等待最终存储关闭的删除/卸载入口；仅公开 bare Session detach 仍不够。
 2. 存储层需要官方的 per-session delete/retire 与缓存失效边界，覆盖冷读回写、Workspace 索引和必要的跨进程协调。
-3. 完成新候选的 Desktop/Web、多客户端、网络断连、主题与屏幕阅读器验收及远程 CI。`e4077a3` 的四个远程矩阵已核实成功，新候选需按其实际提交单独验证 CI。
+3. 第三阶段已完成部分真实 Web/多客户端/主题/网络验收，详见执行报告。`246f787` 的四个远程矩阵已核实成功；本轮未提交修改无远程 CI。新 Desktop、屏幕阅读器、受理后断连/关闭和同步刷新失败实机仍未覆盖。
 
 第二轮版本为 `1.1.0-rc.1`，不是完整 `1.1.0`。修复完成后用户另行授权提交并推送；不创建 Tag 或 Release。
 
@@ -85,3 +85,17 @@
 保留现有集中适配：root、cache table/unit、Workspace predicate 的字段验证；不新增私有生命周期依赖。路径遍历提取 `logFiles`，准备后的复核只检查目标目录，不再次扫描所有项目。缓存 put 和 Workspace predicate 的服务期屏障不能移除，因为没有公开 cache retire 与 Workspace 索引失效入口。
 
 Storage Domain/JSON 的写入队列及 close 仅约束实例内操作，不提供所有 Session/Cache/Workspace 使用者共同遵守的全局独占凭据。因此 `singleHost` 仍是显式人工声明，默认 false；不扫描进程、不自动启用、不把 Session writer lease 当作全存储锁。
+
+## 第三阶段补充：真实 owner 与准入
+
+再次追踪固定源码：AgentRegistry.create/resume 通过 caller-traced ownerCtx 调用 factory（core/agent/src/index.ts:350-415）；loop 的生命周期 effect 挂在 ownerCtx，同时其 factory/scoped world 保持结构所有权（core/agent-loop/src/index.ts:590-675）。Controller 创建/恢复普通会话的返回值只保留 Agent；ACP、子代理 owner 不能被它或第三方插件无条件代替。缺失的是 owner 委托退休能力，而非能否在运行时摸到某个 Map。
+
+core/agent-loop/src/agent.ts:140-262 揭示更具体的准入问题：maintenance 对外 status 也是 idle；send/followup/steer/inject 直接修改 inbox，inject 可以不唤醒 driver；whenIdle 等 activityDone，不原子封闭未来输入。因此“idle 标志 + await dispose”仍可能取消新任务。Controller 的 resumes/claims 队列没有覆盖这些 direct Agent 输入，不能作为通用退休锁。
+
+writer 最终关闭必须发生在 scoped driver 收尾之后；其后 detach 的 disposed Cache 写入又是独立边界。冷查询回写和 Workspace entity 更新也不属于 writer.close。现有公开接口无法组成完整安全流程，继续拒绝 live。最小 additive capability、generation/operationId 区分、权限、未知 owner、部分失败和三片 PR 计划见 [方案](upstream-api-proposal.md)；英文 [Issue 草稿](upstream-issue-draft.md) 未提交。
+
+UI 根因也已核对：ui-primitives/Menu.tsx 在菜单打开时记住触发焦点；ui-workspace/rows/Rows.module.css:256-267 关闭后将未 hover 的 rowActions 设为 display:none。因此对话框不能仅保存已经卸载的菜单项，也不能假定仍连接的按钮一定可 focus。插件只用现有 Hook 和 DOM 的 treeitem 语义恢复行焦点，不读取新的 Host 私有对象。行的临时 tabindex=-1 保留到 blur，立即移除会使 Chromium 再次失焦。
+
+## 本地生命周期补丁
+
+以上审查描述原版 rc.2。本地补丁新增 `agents.retireIfIdle`，标准 AgentLoop 提供 owner 能力，SessionStore 阻止同 ID 的恢复、发布和外部追加；JSONL 返回关闭 Promise，retirement 汇总返回的 disposed Promise。普通 detach 仍同步返回。插件复用现有缓存和 Workspace 保护，并在最终成功时通知客户端。补丁没有增加官方存储删除接口，没有替代现有私有缓存适配，也没有解决多进程共享存储。详见 [补丁说明](../patches/README.md)。

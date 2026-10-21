@@ -185,6 +185,18 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
     }
   }
 
+  async function retire(id) {
+    // Patched DSH delegates to the lifecycle owner and joins writer/observer
+    // completion. Stock rc.2 still permits cold deletion, never private detach.
+    if (typeof ctx.agents.retireIfIdle !== 'function') return cold(id)
+    try { await ctx.agents.retireIfIdle(id) } catch (error) {
+      if (error?.code === 'AGENT_ACTIVE') refuse('session-active', 'This session still has active work. Wait for it to finish.')
+      if (error?.code === 'AGENT_RETIRE_UNSUPPORTED') refuse('live-unload-unsupported', 'This Host cannot safely close the session owner. Use DSH with the idle-retirement patch.', 503)
+      throw error
+    }
+    cold(id)
+  }
+
   function headerValid(header, id) {
     if (header?.id !== id || !Number.isSafeInteger(header.version) || !Number.isFinite(header.createdAt)
       || typeof header.isSeeded !== 'boolean') refuse('unsafe-path', 'Session identity could not be verified.')
@@ -287,7 +299,9 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
         rt.blocked.set(id, protection)
       }
       await inactive(id)
-      cold(id)
+      phase = 'retire'
+      await retire(id)
+      phase = 'preflight'
       const snapshot = await rt.persistence.stat(id)
       if (snapshot?.formatStatus === 'migration-required') refuse('unsupported-format', 'Open/migrate this session with DSH before deleting it.')
       const header = snapshot === undefined ? saved.record?.header : headerValid(snapshot.header, id)
@@ -426,7 +440,7 @@ export function createDeletionService(ctx, { fs = filesystem, verifyVersions = c
         dataState: destructive || recovering || (saved === undefined && rt?.blocked.has(id)) ? 'uncertain' : 'preserved',
         archive: { before: archiveBefore ?? null, after: archived,
           restoration: archiveAttempted && archiveBefore === false && archived !== false ? 'unsupported' : 'not-needed' },
-        protection: rt?.blocked.has(id) ? 'retained' : 'none',
+        protection: rt?.blocked.has(id) || ctx.sessions?.isRetiring?.(id) === true ? 'retained' : 'none',
         releaseFailed,
         message: error instanceof Refusal ? error.message : active ? 'This session still has active work. Wait for it to finish.' : owned
           ? 'Session storage is still owned by a writer. Wait for it to close, then retry.'

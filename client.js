@@ -10,16 +10,17 @@ window.__ModuleLoader__.load({
 
     const zh = {
       menu: '删除会话',
-      title: '删除这个会话？',
+      title: '删除会话？',
       close: '关闭',
-      warning: '该会话的日志与投影缓存会被永久删除，删除后无法恢复。',
+      warning: '此会话的聊天记录将被永久删除，无法恢复。',
       cancel: '取消',
-      confirm: '删除',
+      confirm: '永久删除',
       busy: '正在删除…',
       failed: '删除失败',
-      active: '这个会话还有进行中的工作，请等它结束后再删除。',
+      active: '会话正在运行，请等待任务结束后重试。',
       owned: '会话存储仍由写入者占用，可能正在关闭。请等待写入者释放后重试，不要删除锁文件。',
-      liveUnsupported: 'DSH 尚未提供可安全卸载此 live 会话的接口。请重启 Host，在打开该会话前重试删除。',
+      liveUnsupported: '此 DSH 尚未安装空闲会话关闭补丁。请使用已修补的 Host，或重启 Host 后在打开此会话前删除。',
+      retireFailed: '无法安全关闭会话，请重启 DSH 后重试。',
       unsafePath: '会话存储位置或目录结构无法安全确认，已拒绝删除。请检查 Host 日志。',
       unsupported: '当前 DSH 版本或存储接口未经验证，已拒绝删除。',
       exclusiveStorage: '尚未确认存储目录由单个 Host 独占，已拒绝删除。只有部署确实满足该条件时才能配置 singleHost: true；共享存储不受支持。',
@@ -28,10 +29,9 @@ window.__ModuleLoader__.load({
       syncFailed: 'Host 已确认删除，但客户端同步失败。请重试刷新或重新加载页面。',
       retrySync: '重试刷新',
       unknown: 'Host 结果未知：连接中断或响应无效，删除可能已经完成。请刷新核对，必要时重试同一会话。',
-      preserved: '本次请求未开始删除会话日志。',
+      preserved: '本次未删除聊天记录。',
       dataUnknown: '无法确认会话数据完整性，请检查 Host 日志和存储，勿假定数据仍完整。',
       archived: '会话当前已归档；可重试删除，或在 DSH 中手动恢复。',
-      restored: '会话当前未归档。',
       archiveUnknown: '当前归档状态无法确认，请刷新检查。',
       noRollback: '为保留其他客户端的操作，插件未自动恢复归档。',
       protected: 'Host 仍保留清理保护，请排除错误后重试。若要继续使用会话，请先重启 Host 并确认数据完整。',
@@ -39,16 +39,17 @@ window.__ModuleLoader__.load({
 
     const en = {
       menu: 'Delete session',
-      title: 'Delete this conversation?',
+      title: 'Delete conversation?',
       close: 'Close',
-      warning: 'Its log and projection cache are removed permanently. This cannot be undone.',
+      warning: 'This conversation’s chat history will be permanently deleted. This cannot be undone.',
       cancel: 'Cancel',
-      confirm: 'Delete',
+      confirm: 'Delete permanently',
       busy: 'Deleting…',
       failed: 'Delete failed',
-      active: 'This session still has active work. Wait for it to finish.',
+      active: 'This conversation is running. Wait for the task to finish, then try again.',
       owned: 'Session storage is still owned by a writer, possibly closing. Wait for ownership to be released; do not delete the lock file.',
-      liveUnsupported: 'DSH provides no safe unload API for this live session. Restart the Host, then retry before opening the session.',
+      liveUnsupported: 'This Host needs the idle-session retirement patch. Use a patched Host, or restart and delete before opening this session.',
+      retireFailed: 'The conversation could not close safely. Restart DSH and try again.',
       unsafePath: 'The storage location or structure could not be verified. Deletion was refused. Check the Host log.',
       unsupported: 'This DSH version or storage interface is unverified. Deletion was refused.',
       exclusiveStorage: 'Exclusive single-Host storage has not been declared. Deletion was refused. Configure singleHost: true only when this deployment meets that condition; shared storage is unsupported.',
@@ -57,10 +58,9 @@ window.__ModuleLoader__.load({
       syncFailed: 'The Host confirmed deletion, but client synchronization failed. Retry refresh or reload the page.',
       retrySync: 'Retry refresh',
       unknown: 'The Host outcome is unknown: connection lost or invalid response. Deletion may have completed. Refresh to check; retry the same session if needed.',
-      preserved: 'This request has not deleted session logs.',
+      preserved: 'This attempt has not deleted chat history.',
       dataUnknown: 'Data integrity is unknown. Check the Host log and storage; do not assume the data is intact.',
       archived: 'The session is currently archived. Retry deletion or restore it manually in DSH.',
-      restored: 'The session is currently unarchived.',
       archiveUnknown: 'The archive state is unknown. Refresh to check.',
       noRollback: 'Archive was not automatically restored, to preserve other clients\' actions.',
       protected: 'The Host retains cleanup protection. Resolve the error and retry; to use the session again, restart the Host and verify data integrity first.',
@@ -85,19 +85,23 @@ window.__ModuleLoader__.load({
 .dsd_root{pointer-events:auto;position:fixed;inset:0;z-index:1000;display:flex;align-items:center;justify-content:center;padding:max(24px,var(--dsh-frame-overlay-top,24px)) 24px}
 .dsd_mask{position:absolute;inset:var(--dsh-frame-chrome-top,0px) 0 0;backdrop-filter:var(--dsw-mask-blur)}
 .dsd_mask:after{content:"";position:absolute;inset:0;background:var(--dsw-alias-bg-mask-1)}
-.dsd_dialog{box-sizing:border-box;position:relative;z-index:1;display:flex;flex-direction:column;gap:20px;width:min(380px,100%);padding:0 0 24px;overflow:hidden;border:0;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}
+.dsd_dialog{box-sizing:border-box;position:relative;z-index:1;display:flex;flex-direction:column;gap:20px;width:min(400px,100%);max-height:100%;padding:0 0 24px;overflow:auto;border:0;border-radius:var(--dsw-radius-panel);background:var(--dsw-alias-bg-layer-2);box-shadow:var(--dsw-elevation-prominent)}
+.dsd_content,.dsd_footer{flex:none}
 .dsd_dialog:focus{outline:none}
 .dsd_content{display:flex;flex-direction:column;width:100%}
-.dsd_header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:22px 14px 12px 24px}
-.dsd_title{margin:0;font-size:16px;line-height:24px;font-weight:500;color:var(--dsw-alias-label-primary)}
+.dsd_header{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:20px 16px 16px 24px}
+.dsd_title{margin:0;font-size:16px;line-height:24px;font-weight:600;color:var(--dsw-alias-label-primary)}
 .dsd_close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:var(--dsw-radius-sm);background:transparent;cursor:pointer;color:var(--dsw-alias-label-secondary);padding:0}
 .dsd_close:hover{background:var(--dsw-alias-interactive-bg-hover)}
 .dsd_body{display:flex;flex-direction:column;min-width:0;padding:0 24px}
-.dsd_warning{display:flex;align-items:flex-start;gap:10px;color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
+.dsd_warning{color:var(--dsw-alias-label-secondary);font-size:14px;line-height:22px}
 .dsd_warning p{margin:0}
-.dsd_sessionTitle{margin:0 0 12px;font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;max-height:132px;overflow:auto;white-space:pre-wrap}
-.dsd_warningIcon{flex:none;margin-top:2px;color:var(--dsw-alias-state-error-primary)}
-.dsd_error{margin-top:12px;font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary)}
+.dsd_sessionTitle{margin:0 0 12px;padding:10px 12px;border:1px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);font-size:14px;line-height:22px;font-weight:500;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere;max-height:132px;overflow:auto;white-space:pre-wrap}
+.dsd_warningIcon{display:inline-flex;flex:none;margin-top:1px;color:var(--dsw-alias-state-error-primary)}
+.dsd_error{display:flex;align-items:flex-start;gap:8px;margin-top:16px;padding:12px;border-radius:var(--dsw-radius-md);background:color-mix(in srgb,var(--dsw-alias-state-error-primary) 6%,transparent);font-size:13px;line-height:20px;color:var(--dsw-alias-state-error-primary)}
+.dsd_errorText{min-width:0;overflow-wrap:anywhere}
+.dsd_error p{margin:0}
+.dsd_error .dsd_errorDetail{margin-top:4px;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
 .dsd_footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:0 24px}
 .dsd_button{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:none;border-radius:var(--dsw-radius-md);cursor:pointer;font-size:14px;line-height:22px;color:var(--dsw-alias-label-primary);background:transparent;padding:0 14px;height:36px;font-family:inherit}
 .dsd_button:disabled{cursor:not-allowed;opacity:.4}
@@ -105,8 +109,8 @@ window.__ModuleLoader__.load({
 .dsd_outline:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}
 .dsd_primary{background:var(--dsw-alias-button-primary-fill);color:var(--dsw-alias-label-primary-foreground)}
 .dsd_primary:hover:not(:disabled){background:var(--dsw-alias-button-primary-hover)}
-.dsd_action{min-width:72px}
-.dsd_confirmAction{min-width:136px}
+.dsd_action{min-width:80px}
+.dsd_confirmAction{min-width:96px}
 `
 
     function Styles() {
@@ -231,17 +235,20 @@ window.__ModuleLoader__.load({
         const key = body?.error === 'session-active' ? 'active'
           : body?.error === 'session-owned' ? 'owned'
           : body?.error === 'live-unload-unsupported' ? 'liveUnsupported'
+          : body?.error === 'retire-failed' ? 'retireFailed'
           : ['unsafe-path', 'ambiguous-session', 'storage-unknown', 'identity-changed', 'storage-changed'].includes(body?.error) ? 'unsafePath'
           : ['unsupported-runtime', 'unsupported-format'].includes(body?.error) ? 'unsupported'
           : body?.error === 'exclusive-storage-unverified' ? 'exclusiveStorage' : 'hostFailed'
-        message = `${body?.state === 'partial' ? t('partial') + ' ' : ''}${t(key)}`
-        if (body.dataState === 'preserved') message += ` ${t('preserved')}`
-        if (body.dataState === 'uncertain' && body.state !== 'partial') message += ` ${t('dataUnknown')}`
-        if (body.archive) {
-          message += ` ${t(body.archive.after === true ? 'archived' : body.archive.after === false ? 'restored' : 'archiveUnknown')}`
-          if (body.archive.restoration === 'unsupported') message += ` ${t('noRollback')}`
-        }
-        if (body.protection === 'retained') message += ` ${t('protected')}`
+        message = t(key)
+        const details = []
+        if (body.state === 'partial') details.push(t('partial'))
+        if (body.dataState === 'preserved') details.push(t('preserved'))
+        if (body.dataState === 'uncertain' && body.state !== 'partial') details.push(t('dataUnknown'))
+        if (body.archive?.after === true) details.push(t('archived'))
+        else if (body.archive && body.archive.after !== false) details.push(t('archiveUnknown'))
+        if (body.archive?.restoration === 'unsupported') details.push(t('noRollback'))
+        if (body.protection === 'retained') details.push(t('protected'))
+        return { ok: false, message, details }
       } catch {
         message = t('unknown')
       }
@@ -252,7 +259,13 @@ window.__ModuleLoader__.load({
     // Menu row
     // ---------------------------------------------------------------------
     function DeleteSessionMenuItem({ sessionId, displayTitle, useMenuOpenState }) {
-      const [, setMenuOpen] = useMenuOpenState()
+      const [menuOpen, setMenuOpen] = useMenuOpenState()
+      // Capture the menu trigger before selection focuses an item that will
+      // unmount. The upstream Menu also remembers focus at menu opening.
+      const returnFocus = React.useRef(null)
+      React.useEffect(() => {
+        if (menuOpen) returnFocus.current = document.activeElement
+      }, [menuOpen])
 
       return h(
         React.Fragment,
@@ -270,7 +283,7 @@ window.__ModuleLoader__.load({
               onClick: () => {
                 setMenuOpen(false)
                 if (pending !== null) return
-                setPending({ sessionId, displayTitle })
+                setPending({ sessionId, displayTitle, returnFocus: returnFocus.current })
               },
             },
             h('span', { className: 'dsd_itemIcon' }, h(TrashIcon, null)),
@@ -303,11 +316,23 @@ window.__ModuleLoader__.load({
         busyRef.current = false
         setDeleted(false)
         setError(null)
-        const previous = document.activeElement
+        const previous = request.returnFocus
         const node = dialogRef.current
         if (node !== null) (node.querySelector('[data-delete-cancel]') ?? node).focus()
         return () => {
-          if (previous instanceof HTMLElement && previous.isConnected) previous.focus()
+          if (!(previous instanceof HTMLElement) || !previous.isConnected) return
+          previous.focus()
+          // rc.2 hides the row's action strip with display:none when neither
+          // hovered nor open. Focus the owning tree row if its trigger is hidden.
+          if (document.activeElement === previous) return
+          const row = previous.closest('[role="treeitem"]')
+          if (!(row instanceof HTMLElement)) return
+          const tabIndex = row.getAttribute('tabindex')
+          if (tabIndex === null) {
+            row.setAttribute('tabindex', '-1')
+            row.addEventListener('blur', () => row.removeAttribute('tabindex'), { once: true })
+          }
+          row.focus()
         }
       }, [open, sessionKey])
 
@@ -354,7 +379,7 @@ window.__ModuleLoader__.load({
         if (result.ok) setPending(null)
         else {
           setDeleted(result.deleted === true)
-          setError(result.message)
+          setError({ message: result.message, details: result.details ?? [] })
         }
       }
 
@@ -412,10 +437,15 @@ window.__ModuleLoader__.load({
                 h(
                   'div',
                   { className: 'dsd_warning' },
-                  h('span', { className: 'dsd_warningIcon' }, h(WarningIcon, null)),
                   h('p', { id: bodyId }, t('warning')),
                 ),
-                error === null ? null : h('div', { className: 'dsd_error', role: 'alert' }, error),
+                error === null ? null : h('div', { className: 'dsd_error', role: 'alert' },
+                  h('span', { className: 'dsd_warningIcon' }, h(WarningIcon, null)),
+                  h('div', { className: 'dsd_errorText' },
+                    h('p', null, error.message),
+                    ...error.details.map((detail, index) => h('p', { className: 'dsd_errorDetail', key: index }, detail)),
+                  ),
+                ),
               ),
             ),
             h(

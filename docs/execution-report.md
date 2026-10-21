@@ -1,82 +1,105 @@
-# 第二轮执行报告：1.1.0-rc.1 候选
+# 第三阶段执行报告：真实 Web 验收与上游贡献准备
 
-## 本轮修复
+> 历史记录：随后按用户要求移除了 test/、测试专用依赖、npm test 和 CI 测试步骤。下述测试数量、命令及文件清单描述移除前的验收，不是当前工作区可执行的测试套件，下述旧结果不覆盖本轮本地补丁；当前行为以 README 为准。
 
-开始时实际 HEAD 为 `main` / `e4077a36be21158fa7d1116b33fb91b30f0a26ef`，工作区干净。没有把上一轮基线 CI 当作本轮新代码的证明。本轮仅修改删除状态、相关提示、增量测试和文档。
+日期：2026-10-20。开始时 `main` / `246f787e1d5e6b89111c06d2561ec1af40dfc082`，工作区干净；版本保持 **1.1.0-rc.1**，目标 DSH **0.2.1-rc.2**。本轮修改未提交、未推送；没有 Release、Tag、npm publish 或上游 Issue/PR 提交。
 
-- 写所有权、Flush 和归档前的最终路径验证先于 archive：这些失败保留原有归档/置顶，不需要风险回滚。
-- 归档后出错，返回初始/当前归档、数据与保护状态。rc.2 无 CAS/归档 owner，禁止无条件 unarchive/re-pin；其他客户端的操作不被回滚。
-- Prepared 阶段不再提前标记 partial。新建且未被使用的保护，在 writer 和准备记录清理成功后释放；已使用、旧实例、恢复尝试及释放失败的保护保留。
-- 清理调用之后或旧恢复记录的失败才返回 partial，表示可能不完整；不能声称每个 partial 都已经删掉文件。
-- 启动扫描恢复记录目录一层，重建有效 journal 的保护，包括被其他客户端恢复归档的 ID；不自动继续删盘。
-- 断网、无效响应显示 Host 结果未知；明确完成后才更新客户端，保留仅刷新重试。
-- 恢复记录无法读取/解析时，不再误报数据保留；报告完整性未知并保留保护和原记录，不覆盖证据。
+## 环境与隔离
 
-## 最新删除流程
+使用 `/Applications/DeepSeek Harness.app` 随附的真实 rc.2 CLI/Host，独立 `delete-acceptance` Profile。DSH_HOME、DSH_AGENTS_HOME、documentsDirectory、Session Persistence、Storage/Projection Cache 全部位于忽略的 `.work/phase3`。Host 仅监听 127.0.0.1:57533；插件通过官方 CLI 在临时 Profile 安装本仓库链接。先 false 验证拒绝，再只对临时独占目录启用 singleHost:true。
 
-1. Preflight：部署/版本/路径、恢复记录、activity/live 检查，读取 Header 并精确定位。
-2. Prepared：官方 writer open + Flush、复核路径后才 archive；独立检查活动/归档，建立 ID 保护、写 durable journal、再次验证目标目录。尚未调用日志/缓存删除。
-3. Destructive：检查通过后提交第一个日志 unlink，当前 generation 最后；无日志时由有序缓存删除进入该阶段。失败保留必要保护和恢复证据。
-4. Completed：Cache 磁盘/内存清理、Close、stat/live 验证、Workspace detach、pin/archive/journal 清理，等待标准 removed 事件监听者结算。客户端再移除/刷新。
-5. Partial：清理调用已经开始，或继承未完成 journal 后再次失败；修复原因并显式重试同一 ID，不自动继续，不承诺跨文件事务。
+11 个可丢弃的具名会话通过发布的 Persistence/Session/Workspace 服务和 turn/title/end 事件准备；实际 Host 完整 projection 服务生成列表缓存，启动前完成准备。没有发送付费模型请求。live 夹具是真实 entered Session + official writer；busy 夹具通过受控 workspace/session-activity provider 报告活动，**不是实际运行模型/工具任务**。另有真实客户端打开的普通会话用于 live 拒绝验证。
 
-## 状态一致性与并发
+浏览器验收使用 Chrome 两个独立页面，以及独立 IAB 页面。原生 Chrome 控制后期出现窗口不可操作，转用已可用的 IAB 完成窄视口、DOM 焦点和 live UI 回归。没有把原生操作尝试当作成功。Desktop 无法在现有控制接口下启动独立 DSH_HOME 的第二实例，本轮未做 Desktop 回归，见 [说明与历史证据](desktop-smoke-test.md)。真实 Desktop Profile 未被覆盖/重启；记录的 25 个用户 Session/Storage 文件前后 size/SHA-256 完全相同。
 
-同 ID 请求继续共享一个操作，不同 ID 独立；插件 close 等待已接受请求。原有 native writer lease、Domain 队列及迟到写入测试全部保留。
+## 真实执行的场景
 
-保护使用原 Map/WeakMap 适配，仅增加 intercepted 位；put 和 Workspace predicate 命中均置位。清理准备记录存在 await，释放前再次检查该位，防止清理间隙的写入被拦截后保护仍被撤销。Workspace 的可见 sessionIds 本身也用 predicate，因此保留保护时可能过滤仍有完整日志的行；提示明确要求重试，或重启并核对完整性。durable Workspace 关联未被伪造删除。
+UI = 实际浏览器；HTTP = 实际安装插件的 Host（不是测试 mock）。自动化覆盖另列，不能当作已执行 UI。
 
-archive 返回 void、没有条件恢复凭据。即使另一客户端 archive 是 no-op，用户意图也不可观察。保留状态并说明原因，比自行推断独占归档后回滚更可靠。归档成功可能取消 pin；之后失败不擅自重新置顶。返回的 before/after 是观察值，不是状态版本。
-
-## live 研究结论
-
-**当前 rc.2 不支持第三方插件安全卸载既有 live Session。发现了需要上游提供能力的明确路径，本轮没有实现 live 删除。**
-
-AgentHandle 是创建/恢复 owner 的 capability；get 仅给裸 Agent。官方 teardown 会 stop/drain、释放 scope、Close、detach；Controller 的现有公共 RPC 无 unload/retire。客户端 release 只关闭浏览器引用/Remote stream。真实上游测试证明 Session detach 返回后 JSONL close 仍可能持有 writer。Cache 最后写入亦无公开 per-ID retire 屏障。
-
-关键固定源码与最小 API：见 [审查记录](upstream-audit.md) 和 [接口建议](upstream-api-proposal.md)。建议由官方 owner 提供 idle retirement lease，原子阻止新工作，等待最终关闭和 cache/Workspace 退休；另提供精确存储 remove 与条件归档恢复。不能用私有 detach、fiber 销毁或替换内部 Map 代替。
-
-## 实际测试
-
-| 命令/动作 | 结果 |
+| 场景 | 结果和证据层次 |
 |---|---|
-| 新增回归用例对旧代码运行 | 观察到失败，原始输出 `.work/round2-*-before.log` |
-| `npm ci` | 通过，无新增依赖 |
-| `npm run check` | 通过 |
-| `npm test`，Node 24.12.0 | 74 通过，0 失败，0 跳过 |
-| `npx --yes --package=node@22.19.0 node --test test/*.test.js` | 74 通过，0 失败，0 跳过 |
-| `npm run pack:check` | 通过 |
-| 实际 npm pack、临时解包并 import 插件入口 | 通过，16 个发布文件；版本/lock 一致，不含 test/.work/node_modules |
-| `git diff --check`、版本/lock 与包内容核对 | 通过 |
-| GitHub check run 39390886294 | e4077a3 基线四个矩阵成功；不代表本轮新代码远程通过 |
+| 默认 singleHost:false | UI 中文错误明确拒绝；HTTP 503 exclusive-storage-unverified；目标日志/缓存仍在 |
+| 冷会话删除 | Chrome A 确认后行消失；B 未手动刷新也移除；磁盘日志/当前缓存/Workspace ID/journal 清理；稳定 session.lock 保留 |
+| 其他会话隔离 | 对照日志、锁、缓存 SHA-256 在删除及 Host 重启后均不变 |
+| 切换页面/重启不回弹 | 两次后续 Host 启动及重新认证后目标行未返回；五个已清理目标日志/缓存仍不存在 |
+| 重复删除 | HTTP 返回 already-absent，必要清理完成，无额外破坏 |
+| 已打开、空闲 live 会话 | IAB 实际查看普通会话后删除，英文 live-unload-unsupported 提示；框保留，Escape 后原视图和行仍在，日志保留；独立 live 夹具也被 HTTP 拒绝 |
+| 活动状态 | busy 受控 provider 的 HTTP 请求 session-active，数据保留；未运行真实模型/工具任务 |
+| 已归档冷会话 | HTTP 成功；日志/缓存/关联及归档标记清理 |
+| 写所有权失败/原 pin | 子进程持有真实 zstd writer lease，HTTP session-owned；pin 保留、未新增归档，日志保留 |
+| 同 ID 重复、不同 ID 并发 | 真实 HTTP 并发请求成功、最终磁盘和关联一致；不是两个浏览器同时点确认的 UI 测试 |
+| 无效 ID | HTTP 400 bad-request；未扩大文件定位范围 |
+| 不可逆清理中途故障 | 临时缓存目录移除写权限，日志清理后 cache 阶段返回 partial，保留缓存与恢复记录；finally 恢复权限 |
+| Host 重启、恢复记录 | 重启后 journal/cache 仍在，没有自动完成破坏性清理；显式 HTTP 重试成功，必要清理完成 |
+| 网络中断 | 确认框打开后停止本测试 Host，再点删除，UI 显示 Host 结果未知；不能解释为 Host 已受理后中断也通过 |
+| 中文浅色/英文深色/长标题 | 实际标题、风险、按钮和错误可读；长标题换行且限制高度；没有声称所有语言×主题组合都测过 |
+| Tab / Shift+Tab / Escape / 取消 / 遮罩 | 真浏览器执行；取消不删除；焦点循环。修复后 Escape 返回 treeitem，下一次 Tab 正常；遮罩关闭通过 |
+| 窄视口 | 先在 Chrome 400% 放大复现高度溢出；修复后 IAB 360×240 可滚动，Tab 到 Delete 时按钮和 Cancel 均在视口内 |
+| 查看中目标被其他客户端删除 | 查看产生 live，按支持范围拒绝，不强制切换/停止；未证明可直接删除该 live 目标 |
 
-新增 22 项测试保留原 52 项：归档/置顶、锁/Flush、并发归档恢复、Prepared 故障、保护拦截与释放竞态、journal 释放失败、writer 释放失败、启动恢复、真实 detach/close 异步边界和双语未知结果。原有部分删除重试、子进程崩溃恢复、卸载 drain、缓存排队与迟到写入、路径/权限等无回归。
+本地证据位于忽略的 `.work/phase3`：before-delete.json、http-results.json、restart-retry.json、final-storage.json、user-data-before/after.json；evidence/narrow-dialog.png、en-dark-dialog.png、live-refused.png。只包含固定夹具的页面截图不进入 npm 包；临时认证信息不写入发布文档。
 
-本轮所有磁盘用例仅使用临时目录，没有改动真实用户 ~/.dsh，没有再次启动用户 Desktop。上一轮 Desktop 实测只对应当时基线，见历史记录；本轮完整 Desktop/Web、多客户端 UI、屏幕阅读器、Windows 与 Linux 新候选运行未实测。React renderer 的弃用提示仍存在，不视作功能失败。
+HTTP 故障脚本调试中修正了夹具配置：writer compression 必须匹配 zstd；无效 ID 的实际协议是 400 bad-request。初始缺少完整 projection 元数据导致冷标题未显示，通过真实 Host 的投影服务重建夹具后才开始验收。这些是测试准备问题，没有据此改动产品或降低现有回归断言。
 
-## 文件变更
+## 实际缺陷与最小修复
 
-| 文件 | 目的 |
+| 级别 | 复现/根因 | 修复与验证 |
+|---|---|---|
+| P2 焦点丢失 | 打开会话菜单→删除框→Escape；原实现捕获卸载的菜单项/页面根。rc.2 rowActions 关闭后 display:none，连接着的 trigger 也无法 focus | 菜单打开时记录焦点；关闭时先还给连接的 trigger，失败则聚焦其 ARIA treeitem。临时 tabindex=-1 到 blur 再恢复，立即移除会再次失焦。Chrome AX 与 IAB DOM 都验证返回行，下一次 Tab 正常。被移除的 trigger 不强行聚焦 |
+| P2 短视口溢出 | 英文深色长标题，浏览器 400% 时 modal 高度超出视口，按钮难以访问 | dialog max-height:100% + overflow:auto，内容/页脚不压缩；IAB 360×240 实测滚动和键盘到达按钮 |
+
+host.js、路由、并发、路径、持久化和现有拒绝策略均未重构；没有新增依赖、私有 Host 适配或版本范围。
+
+## 测试与 CI
+
+| 实际命令 | 结果 |
 |---|---|
-| host.js | 调整归档/准备/清理边界，保护释放和恢复，明确故障状态 |
-| client.js | 双语归档/保护状态、网络未知结果，继续仅凭明确 Host 成功同步 |
-| test/state.test.js（新增） | 19 项状态一致性与真实生命周期增量回归 |
-| test/client.test.js | 3 项新增双语反馈用例；旧响应夹具补上实际 Host 返回的 sessionId |
-| package.json / package-lock.json | 同步版本 1.1.0-rc.1，不增依赖、不扩大 engines |
-| README.md / CHANGELOG.md | 安装、独占声明、阶段/错误、候选版本与限制 |
-| docs/testing.md | 本轮覆盖、失败复现、命令和 CI 证据 |
-| docs/upstream-audit.md | 归档 CAS 缺失、live owner/引用、私有适配必要性 |
-| docs/upstream-api-proposal.md（新增） | 最小官方 API 和验收语义 |
-| docs/execution-report.md | 本轮报告 |
+| npm ci | 通过 |
+| npm run check | 通过 |
+| npm test（Node 24.12.0） | 77 通过，0 失败/跳过 |
+| npx --yes --package=node@22.19.0 node --test test/*.test.js | 77 通过，0 失败/跳过 |
+| npm run pack:check | 通过；最终包检查另核对文档和临时文件排除 |
+| 实际 npm pack、解包并 import ESM 入口 | 通过；17 个文件，包含 Issue 草稿，不含 test/.work/node_modules；版本和 lock 一致 |
+| git diff --check | 通过 |
+| gh run view 39395891040 --json headSha,conclusion,jobs | HEAD 246f787，Linux/macOS × Node 22.19/24 四个任务全部 success |
 
-## 剩余风险
+新增焦点用例对基线 client.js 的隔离副本运行，两个对应断言确实失败；没有回退正在使用的源码或修改旧断言，输出为 .work/phase3/client-before.log。
 
-- P0：本轮未发现独占、可信存储边界内新增的已知误删路径；不提供恶意文件系统替换或共享目录保证，不能理解为绝对安全。
-- P1：live 安全退休、跨 Host 协调、归档条件恢复均缺少上游能力。继续拒绝 live/未声明独占；归档后失败可能保留归档/失去原 pin，结果已明确。已有恢复记录/被使用保护可能要求重试，重启不恢复已删除数据。
-- P2：仍有固定 rc.2 的 root/cache table/Workspace predicate 私有适配；不能移除长期屏障而保留迟到写入保证。完整 UI/新候选远程矩阵尚待验证，未扩展 DSH 版本范围。
+3 个新增组件回归覆盖菜单项卸载后的 trigger、trigger 被另一客户端移除、hidden strip 的行回退及 blur 后 tabindex 恢复。原 74 个生命周期、故障、路径、跨进程、并发、网络/同步测试保留。样式修复通过真实浏览器验证，组件 mock 不作为布局证据。远程 run 仅对应已提交基线，**不证明本轮未提交代码已通过远程矩阵**。
 
-## 发布状态
+## 未执行与剩余风险
 
-版本为 **1.1.0-rc.1**。可供明确接受上述边界的开发者在独占隔离环境继续预发布验收；**不建议普通用户直接替换重要数据环境，不满足稳定 1.1.0 完整发布条件**。需要上游能力的 live 成功路径仍是功能缺失，而非“安全拒绝测试通过即功能完成”。
+- P0：在已声明的可信、单 Host 存储范围内，本轮未发现新增误删/写入竞态；这不是绝对安全证明。共享目录、多 Host 和恶意并发文件替换仍不受支持；singleHost 是人工声明，不是存储独占检测。
+- P1 上游能力：live 退休缺 owner 委托、统一准入和 Cache/Workspace completion；maintenance/status 也不能单独证明 idle。归档缺 CAS，后续失败可能保留归档/丢 pin，继续明确报告而不冒险回滚。
+- P1 验收缺口：本轮新 Desktop、Host 成功但 refresh 失败的实机仅同步重试、受理请求后关闭浏览器/断连、两个浏览器同时确认并与 archive/restore 交错未执行。准备失败、迟到写入、旧 refresh 覆盖和 busy 双击等由现有自动化验证，不冒充 UI 通过。Windows、屏幕阅读器、真实执行模型/工具未测。
+- P2：仍依赖固定 rc.2 的 root/cache table/Workspace predicate 适配；未新增此类依赖。焦点触发元素或所属行因外部更新/布局变化而卸载时，不强行聚焦不存在节点。
 
-本轮从 main / e4077a3 开始实施，修复与验证后用户另行授权提交并推送到 main，不创建 Tag 或 Release。CI 配置未修改；新代码远程 CI 需按实际提交 SHA 单独确认，不能由基线或本地结果代替。
+## 文件与发布建议
+
+收尾已关闭三个自建浏览器页面，停止隔离 Host，并删除临时 home、agents、documents 和解包目录。只保留忽略的脱敏日志、夹具脚本、配置快照、证据和本地打包产物。cleanup.json 确认 25 个用户数据文件 size/SHA-256 均未变化。
+
+client.js：两处真实 UI 修复；test/client.test.js：三项针对性回归；README/CHANGELOG：准确的支持范围和验收；testing.md、desktop-smoke-test.md、upstream-audit.md：分开记录实测/自动化/未测；upstream-api-proposal.md 和新增 upstream-issue-draft.md：owner、权限、原子准入、generation、provider remove、失败重试及最小 PR 模块/测试计划；本文件：交付证据。
+
+现有公开接口不能安全组成 live 删除流程；不侵入 owner，也不伪造完成。已准备可实施的上游方案和英文 Issue，但未提交。
+
+保持 **1.1.0-rc.1**。当前冷会话支持范围可继续受控预发布，本轮未发现该范围内新的阻塞性删除缺陷；完整真实环境验收仍有上述缺口，暂不建议直接宣布稳定版或普通用户无条件安装。下一步先补齐新 Desktop 与受理后断连/同步故障回归，再决定限定“单 Host 冷会话删除”的稳定版；live 官方退休能力作为独立上游工作，不靠继续堆叠插件私有生命周期操作解决。
+
+## 本轮空闲会话关闭实现
+
+在独立 `DSH_HOME` 的官方 Web Profile 启动器中加载本地五个修改包，实际创建普通 Agent，并通过插件 HTTP 路由删除。已观察到：live 空闲会话删除后两个 store、日志、缓存均不存在；活动轮次、已归档维护操作和待处理输入被拒绝且未取消；挂起的 disposed Promise 结束前文件仍存在且没有 removed 事件；这期间 send/resume/append 均返回 `SESSION_RETIRING`。Flush 异常保留文件及会话行，重复和不同 ID 并发删除成功。没有调用付费模型，没有操作真实用户存储。
+
+删除套件后未运行自动化测试。插件语法/打包与本地运行的验证结果及未完成的上游完整类型/构建检查见 [本轮说明](../patches/README.md)。
+
+## 2026-10-21：完成官方构建验证
+
+上次临时类型检查混用了工作区源码与 npm 声明。本轮安装上游锁定的开发依赖，改用原生 Project References；相关包及依赖类型检查通过。随后执行完整 `DSH_GATE_CONCURRENCY=1 DSH_GATE_FAIL_FAST=1 pnpm run build`，最终 9 项通过，0 失败、0 跳过，包含 Host/Client 编译与聚合检查、原生模块、Host/Desktop/Client bundle 和 Web 构建。
+
+修正本次新增代码的六项 lint 问题：用捕获的计数对象维护并发 setup，避免非空断言；保持 disposed 回调同步发起并 await 返回值，汇总 unknown 错误，保留非 Error dispatch 异常的 cause；补齐 void 回调写法和公开拒绝代码说明。修改文件的类型感知 lint 与全仓导出 JSDoc 检查通过。
+
+正式构建的 CLI Web Profile 使用独立临时存储，在 Node 24.12.0 验证四项、Node 22.19.0 验证五项实际接口结果：live 空闲删除成功；维护中拒绝且保留 Agent；disposed 返回的 Promise 拒绝时保留日志、缓存及 Workspace 关联、不发移除事件；失败后的同 Host 重试继续拒绝；重启后可安全清理先前失败的会话。没有恢复自动化套件，没有调用付费模型。
+
+官方构建及上述接口验收通过后同步更新源码补丁。Desktop bundle 已生成，尚未打包或启动新的 Desktop 应用；已安装 Desktop 和真实用户数据未修改。版本仍为 `1.1.0-rc.1`，未创建 Tag/Release，未提交或推送远程。
+
+## 本地 Desktop 安装（2026-10-21）
+
+随后用户授权替换实际应用。已完成同版 Desktop 的局部 ASAR 替换、本机签名校验和实际启动；应用包自带 CLI 的隔离删除/活动拒绝/关闭失败保留验证通过。原生 Desktop 已删除一条用户授权的、已加载且空闲的现有对话；日志/缓存/Workspace 均清理，重启后未回弹，其余 7 条日志哈希不变。原应用及配置已备份，详情见 [Desktop 安装记录](desktop-smoke-test.md)。未生成官方安装程序，也未创建 Tag 或 Release；本地应用安装与 Git 代码推送相互独立。
